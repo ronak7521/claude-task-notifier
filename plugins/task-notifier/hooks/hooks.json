@@ -1,38 +1,41 @@
 {
-  "description": "Windows notifications when Claude finishes, fails or needs permission",
+  "description": "Windows toast notifications when Claude finishes, fails, asks a question or needs permission",
   "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/notify.cmd\"",
-            "timeout": 10
-          }
-        ]
-      }
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "async": true } ] }
     ],
     "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "async": true } ] }
+    ],
+    "Notification": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/notify.cmd\"",
-            "timeout": 10
-          }
-        ]
+        "matcher": "permission_prompt|elicitation_dialog|elicitation_url_dialog",
+        "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "async": true } ]
       }
     ],
-    "StopFailure": [
+    "PreToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/notify.cmd\"",
-            "timeout": 10
-          }
-        ]
+        "matcher": "AskUserQuestion",
+        "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "async": true } ]
       }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd", "ifpending"], "async": true } ] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd", "ifpending"], "async": true } ] }
+    ],
+    "PermissionDenied": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd", "ifpending"], "async": true } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd", "ifpending"], "timeout": 10 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "timeout": 10 } ] }
+    ],
+    "StopFailure": [
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "timeout": 10 } ] }
     ]
   }
 }
