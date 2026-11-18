@@ -9,7 +9,7 @@
     {
       "name": "task-notifier",
       "source": "./plugins/task-notifier",
-      "description": "Windows notification when Claude Code finishes a task or needs your permission."
+      "description": "Windows toast notifications when Claude Code finishes a task or needs your permission."
     }
   ]
 }
