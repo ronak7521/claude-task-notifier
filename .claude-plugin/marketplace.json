@@ -1,0 +1,15 @@
+{
+  "name": "ronak-plugins",
+  "description": "Claude Code plugins by Ronak Chotaliya.",
+  "owner": {
+    "name": "Ronak Chotaliya",
+    "url": "https://github.com/ronak7521"
+  },
+  "plugins": [
+    {
+      "name": "task-notifier",
+      "source": "./plugins/task-notifier",
+      "description": "Windows notification when Claude Code finishes a task or needs your permission."
+    }
+  ]
+}
