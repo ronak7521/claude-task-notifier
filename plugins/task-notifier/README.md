@@ -25,6 +25,11 @@ Notifications are modern Windows toasts:
   Each project keeps only its latest toast of each kind, so old ones do not pile up.
 - Each type has its own sound: the normal sound when finished, a reminder sound when Claude is waiting for you,
   and a different sound for errors.
+- **Quiet while you watch**: no toast while the window running Claude is in front of you and you used the
+  keyboard or mouse in the last 2 minutes. In VS Code the window title must show the project name, so another
+  project's window does not count. In Windows Terminal any of its windows counts, since the active tab is unknown.
+- **Click to open**: in VS Code (and Cursor or Windsurf), clicking a toast opens the project's window.
+  In a plain terminal, clicking just dismisses it.
 
 ## Install
 ```
@@ -39,13 +44,20 @@ Add to the `env` block of `~/.claude/settings.json`, then start a new session:
 {
   "env": {
     "TASK_NOTIFIER_MIN_SECONDS": "30",
-    "TASK_NOTIFIER_PRIVACY": "1"
+    "TASK_NOTIFIER_PRIVACY": "1",
+    "TASK_NOTIFIER_EVENTS": "permission,question,input,error"
   }
 }
 ```
 - `TASK_NOTIFIER_MIN_SECONDS`: only notify for tasks that took at least this long. Default `30`; `0` = always.
 - `TASK_NOTIFIER_PRIVACY`: `1` shows only the project name, never prompt, reply, command or error details.
   Recommended when screen sharing or working with customer data.
+- `TASK_NOTIFIER_EVENTS`: only these notification types, comma-separated. Default: all of `finished`, `asking`,
+  `paused`, `error`, `permission`, `question`, `input`. For example `permission,question,input` gives only
+  the "Claude is waiting for you" toasts.
+- `TASK_NOTIFIER_WHEN_FOCUSED`: `1` notifies even while you are looking at Claude.
+- `TASK_NOTIFIER_DEBUG`: `1` logs every decision (shown, or why it stayed quiet) to
+  `%TEMP%\claude-task-notifier\debug.log`. It records titles and reasons, never your prompts or Claude's replies.
 
 ## How it works
 The hooks print nothing and never block or change what Claude does. The plugin does not touch your `settings.json`.
@@ -65,6 +77,9 @@ All except `Stop`, `StopFailure` and `SessionEnd` run in the background (`async`
 
 - Small state files live in `%TEMP%\claude-task-notifier`: your prompt time and text (time only in privacy
   mode) and what a pending permission is for. Files older than 7 days are deleted automatically.
+- `%LOCALAPPDATA%\claude-task-notifier` caches `ctn-native-1.dll`, a tiny helper compiled on your machine on
+  first use that asks Windows which window is in front (it makes the focus check take 20 ms instead of 700 ms).
+  It is kept in your user profile, not in TEMP, because TEMP can point to a folder other users can write to.
 - To show the **Task Notifier** name and icon, the script registers the app in your user registry under
   `HKCU\Software\Classes\AppUserModelId\ClaudeCode.TaskNotifier`. This needs no admin rights.
 - If toasts are not available, it falls back to a classic tray balloon.
@@ -73,14 +88,40 @@ All except `Stop`, `StopFailure` and `SessionEnd` run in the background (`async`
 ```
 /plugin uninstall task-notifier@ronak-plugins
 ```
-Then remove the registry entry and saved prompt times in PowerShell:
+Then remove the registry entry, saved prompt times and the cached helper in PowerShell:
 ```powershell
 Remove-Item 'HKCU:\Software\Classes\AppUserModelId\ClaudeCode.TaskNotifier' -Recurse
-Remove-Item "$env:TEMP\claude-task-notifier" -Recurse
+Remove-Item "$env:TEMP\claude-task-notifier", "$env:LOCALAPPDATA\claude-task-notifier" -Recurse
 ```
+
+## Security
+- Prompts, replies, commands and file names are only ever shown as text: they are XML-escaped in the toast,
+  never run, and never passed on a command line. Hook input is read from stdin only.
+- State files are named from the session id with everything except letters, digits, `-` and `_` removed,
+  so they cannot be written outside the state folder.
+- The click link only uses fixed schemes (`vscode`, `vscode-insiders`, `cursor`, `windsurf`) and escapes
+  every folder name.
+- Privacy mode and the debug log never contain prompt, reply, command, question or error text.
+- The registry entry is under HKCU only; no admin rights, nothing machine-wide.
+
+## Tests
+The repository (not the installed plugin) has two test suites. Run them before a release:
+```
+tests\run-tests.cmd          all tests, no toasts shown
+tests\run-tests.cmd live     also shows and removes one real toast
+```
+- **Feature tests**: every notification type and its text, sound and stickiness; the waiting-toast lifecycle
+  (recorded, shown, cleared by answering, by the next prompt, at the end of the turn or session); every setting;
+  quiet-while-watching with a simulated screen; click links; debug log; clean-up of old state; the hook wiring.
+- **Security tests**: hostile hook input, path traversal, toast XML injection, link escaping, command injection,
+  privacy and debug-log leaks, and a planted helper DLL.
+
+They run the real launcher in dry-run mode inside a throwaway TEMP folder, so they leave your settings,
+state and registry untouched. Exit code 0 means everything passed.
 
 ## Troubleshooting
 - Nothing appears: check Do not disturb and Settings > System > Notifications (allow **Task Notifier**).
+  Then set `TASK_NOTIFIER_DEBUG=1`, start a new session and read `debug.log`: it says why each toast stayed quiet.
 - "AuthorizationManager check failed": run `Get-ExecutionPolicy -List`; a Group Policy may block scripts.
 - After unzipping a download, run `Get-ChildItem <folder> -Recurse | Unblock-File`.
 - To test without showing anything, pipe a hook payload into `scripts\notify.cmd` with `CTN_DRYRUN=1` set;

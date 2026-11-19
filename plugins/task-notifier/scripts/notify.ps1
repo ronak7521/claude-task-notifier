@@ -10,8 +10,12 @@
 # Keep this file ASCII-only: Windows PowerShell 5.1 reads BOM-less files as ANSI.
 #
 # Optional settings (environment variables, e.g. in the "env" block of ~/.claude/settings.json):
-#   TASK_NOTIFIER_MIN_SECONDS  Only notify for finished tasks that took at least this long (default 30, 0 = always)
-#   TASK_NOTIFIER_PRIVACY      1 = show only the project name, never prompt, reply, command or question text
+#   TASK_NOTIFIER_MIN_SECONDS     Only notify for finished tasks that took at least this long (default 30, 0 = always)
+#   TASK_NOTIFIER_PRIVACY         1 = show only the project name, never prompt, reply, command or question text
+#   TASK_NOTIFIER_EVENTS          Only these types, e.g. "permission,question,input,error" (default: all of
+#                                 finished, asking, paused, error, permission, question, input)
+#   TASK_NOTIFIER_WHEN_FOCUSED    1 = notify even while you are looking at Claude (default: stay quiet then)
+#   TASK_NOTIFIER_DEBUG           1 = log every decision to %TEMP%\claude-task-notifier\debug.log
 # Testing: set CTN_DRYRUN=1 to print the notification to stderr instead of showing it.
 #
 # Toasts are shown under their own app id. Windows only gives an unpackaged app a name and icon when the
@@ -21,7 +25,39 @@ $ErrorActionPreference = 'SilentlyContinue'
 $AppId = 'ClaudeCode.TaskNotifier'
 $AppName = 'Task Notifier'
 $StateDir = Join-Path $env:TEMP 'claude-task-notifier'
+# Compiled code is cached in the user profile, never in TEMP: TEMP may point to a folder other users can write to.
+$CacheDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'claude-task-notifier' } else { '' }
 $WaitSeconds = 6
+$AwaySeconds = 120
+$NativeVersion = 1
+$script:LogTag = ''
+
+# On/off settings accept 1, true, yes or on, ignoring case and surrounding spaces.
+function Test-Flag([string]$value) { return $value.Trim() -match '^(1|true|yes|on)$' }
+
+# --- Debug log (TASK_NOTIFIER_DEBUG=1): decisions and titles only, never prompt or reply text ---
+
+function Write-Log([string]$msg) {
+    if ($env:CTN_DRYRUN -and $msg) { [Console]::Error.WriteLine("  ($msg)") }
+    if (-not (Test-Flag $env:TASK_NOTIFIER_DEBUG)) { return }
+    try {
+        $null = New-Item -ItemType Directory -Force -Path $StateDir
+        $log = Join-Path $StateDir 'debug.log'
+        if ((Test-Path -LiteralPath $log) -and (Get-Item -LiteralPath $log).Length -gt 1MB) {
+            Move-Item -LiteralPath $log (Join-Path $StateDir 'debug.old.log') -Force
+        }
+        # One entry per line: control characters (e.g. a newline in an error message) cannot fake log entries.
+        $msg = $msg -replace '[\x00-\x1F\x7F]+', ' '
+        $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $script:LogTag, $msg
+        [IO.File]::AppendAllText($log, $line + "`r`n", (New-Object Text.UTF8Encoding $false))
+    } catch { }
+}
+
+function Test-Enabled([string]$type) {
+    $list = ([string]$env:TASK_NOTIFIER_EVENTS).Trim()
+    if (-not $list) { return $true }
+    return @($list.ToLowerInvariant() -split '[\s,;]+') -contains $type
+}
 
 $ErrorText = @{
     rate_limit            = 'Rate limit reached'
@@ -157,17 +193,126 @@ function Register-App {
     }
 }
 
+# --- Are you looking at Claude right now? ---
+
+# Small Win32 helper. Compiling it takes ~0.7 s, so it is compiled once into a cached DLL.
+function Initialize-Native {
+    if ('CTN.Native' -as [type]) { return }
+    $source = @'
+using System; using System.Runtime.InteropServices; using System.Text;
+namespace CTN {
+  public static class Native {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+    [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+    [StructLayout(LayoutKind.Sequential)] struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+    public static string Title(IntPtr hwnd) { var sb = new StringBuilder(512); GetWindowText(hwnd, sb, 512); return sb.ToString(); }
+    public static IntPtr RootOwner(IntPtr hwnd) { return GetAncestor(hwnd, 3); }
+    public static uint IdleMilliseconds() {
+      var info = new LASTINPUTINFO(); info.cbSize = (uint)Marshal.SizeOf(info);
+      if (!GetLastInputInfo(ref info)) return 0;
+      return unchecked((uint)Environment.TickCount - info.dwTime);
+    }
+  }
+}
+'@
+    # No user profile folder: compile in memory every time rather than cache somewhere less safe.
+    if (-not $CacheDir) { Add-Type -TypeDefinition $source -ErrorAction Stop; return }
+    $dll = Join-Path $CacheDir "ctn-native-$NativeVersion.dll"
+    $tmp = Join-Path $CacheDir "ctn-native-$NativeVersion.$PID.tmp.dll"
+    try { Add-Type -Path $dll -ErrorAction Stop; return } catch { }
+    try {
+        # Build next to the final name and move into place, so parallel hooks never load a half-written file.
+        $null = New-Item -ItemType Directory -Force -Path $CacheDir
+        Add-Type -TypeDefinition $source -OutputAssembly $tmp -OutputType Library -ErrorAction Stop
+        Move-Item -LiteralPath $tmp $dll -ErrorAction Stop
+        Add-Type -Path $dll -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath $tmp -Force
+        if (-not ('CTN.Native' -as [type])) { Add-Type -TypeDefinition $source -ErrorAction Stop }
+    }
+}
+
+# True when the window running this Claude session is in front and you used the keyboard or mouse in
+# the last 2 minutes. Then you can see Claude yourself, so the toast would only interrupt you.
+function Test-Watching([string]$project) {
+    if (Test-Flag $env:TASK_NOTIFIER_WHEN_FOCUSED) { return $false }
+    try {
+        Initialize-Native
+        $idle = [CTN.Native]::IdleMilliseconds() / 1000
+        if ($idle -ge $AwaySeconds) { Write-Log ("away: no input for {0:N0} s" -f $idle); return $false }
+        $fg = [CTN.Native]::GetForegroundWindow()
+        if ($fg -eq [IntPtr]::Zero) { return $false }
+
+        # Terminal: our console window, or the terminal window that owns it (Windows Terminal).
+        $console = [CTN.Native]::GetConsoleWindow()
+        if ($console -ne [IntPtr]::Zero -and ($console -eq $fg -or [CTN.Native]::RootOwner($console) -eq $fg)) { return $true }
+
+        $fgPid = [uint32]0
+        $null = [CTN.Native]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+        $name = (Get-Process -Id $fgPid -ErrorAction Stop).ProcessName
+        # Windows Terminal does not tell which tab is active, so any of its windows counts.
+        if ($env:WT_SESSION -and $name -eq 'WindowsTerminal') { return $true }
+
+        # VS Code (extension or integrated terminal): one process owns every window, so the window must
+        # also show this project's name in its title.
+        $editor = ((Get-EditorPid) -eq [int]$fgPid) -or
+                  ($env:TERM_PROGRAM -eq 'vscode' -and $name -match '^(Code|Code - Insiders|Cursor|Windsurf)$')
+        if ($editor) { return ([CTN.Native]::Title($fg) -match [regex]::Escape($project)) }
+        return $false
+    } catch {
+        Write-Log "focus check failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# --- Click a toast to open the project (VS Code and its forks only; a terminal has no link to open) ---
+
+# VSCODE_PID as a number, or -1 when it is missing or not a plain number.
+function Get-EditorPid {
+    $value = ([string]$env:VSCODE_PID).Trim()
+    if ($value -match '^\d{1,9}$') { return [int]$value }
+    return -1
+}
+
+# Only these fixed schemes are ever used; the process name just picks one of them.
+function Get-EditorScheme([string]$name) {
+    switch -regex ($name) {
+        '^Code - Insiders$' { return 'vscode-insiders' }
+        '^Cursor$'          { return 'cursor' }
+        '^Windsurf$'        { return 'windsurf' }
+    }
+    return 'vscode'
+}
+
+function Get-LaunchUri([string]$cwd) {
+    try {
+        if (-not $cwd) { return '' }
+        $editorPid = Get-EditorPid
+        if ($editorPid -gt 0) { $name = (Get-Process -Id $editorPid -ErrorAction Stop).ProcessName }
+        elseif ($env:TERM_PROGRAM -eq 'vscode') { $name = 'Code' }
+        else { return '' }
+        $scheme = Get-EditorScheme $name
+        # Escape each folder name, so '#', '?' or '%' in a name cannot change what the link points to.
+        $parts = @(($cwd -replace '\\', '/').Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) })
+        if ($parts[0] -match '^[A-Za-z]%3A$') { $parts[0] = $parts[0].Substring(0, 1) + ':' }
+        return "${scheme}://file/" + ($parts -join '/')
+    } catch {
+        Write-Log "no click link: $($_.Exception.Message)"
+        return ''
+    }
+}
+
 function Format-Xml([string]$s) { return [Security.SecurityElement]::Escape($s) }
 
 # Modern toast, kept in the notification center (Win+N) under a header per project.
 # Same tag + group replaces the older toast, so each project keeps only its latest toast of each kind.
 # Sticky toasts use the reminder scenario: they stay on screen until clicked or dismissed.
 # All text is XML-escaped, so prompts or file names cannot change the toast markup.
-function Show-Toast($note, [string]$group, [string]$cwdKey, [string]$project) {
-    $ErrorActionPreference = 'Stop'
-    Register-App
-    Initialize-Toasts
-
+function Get-ToastXml($note, [string]$cwdKey, [string]$project, [string]$launch) {
     # A toast shows the title plus at most two text lines.
     $lines = @($note.Lines)
     if ($lines.Count -gt 2) { $lines = @($lines[0], (($lines[1..($lines.Count - 1)]) -join "`n")) }
@@ -176,14 +321,21 @@ function Show-Toast($note, [string]$group, [string]$cwdKey, [string]$project) {
     # Windows 11 only keeps a reminder on screen when it has a button.
     $actions = if ($note.Sticky) { '<actions><action activationType="system" arguments="dismiss" content=""/></actions>' } else { '' }
     $hid = Format-Xml $cwdKey
-    $xml = "<toast$scenario>" +
+    # Clicking the toast opens the project in the editor that runs Claude.
+    $open = if ($launch) { " launch=`"$(Format-Xml $launch)`" activationType=`"protocol`"" } else { '' }
+    return "<toast$scenario$open>" +
         "<visual><binding template=`"ToastGeneric`">$texts</binding></visual>" +
         "<audio src=`"ms-winsoundevent:$($note.Sound)`"/>" + $actions +
         "<header id=`"$hid`" title=`"$(Format-Xml $project)`" arguments=`"$hid`"/>" +
         '</toast>'
+}
 
+function Show-Toast($note, [string]$group, [string]$cwdKey, [string]$project, [string]$launch) {
+    $ErrorActionPreference = 'Stop'
+    Register-App
+    Initialize-Toasts
     $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
-    $doc.LoadXml($xml)
+    $doc.LoadXml((Get-ToastXml $note $cwdKey $project $launch))
     $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
     $toast.Tag = $note.Tag
     $toast.Group = $group
@@ -213,8 +365,11 @@ $n.Dispose()
 
 # --- Building the notification for each event ---
 
-function New-Note($title, $lines, $sound, $tag, $kind, [bool]$sticky) {
-    return [pscustomobject]@{ Title = $title; Lines = @($lines | Where-Object { $_ }); Sound = $sound; Tag = $tag; Kind = $kind; Sticky = $sticky }
+# $type is one of the TASK_NOTIFIER_EVENTS names: finished, asking, paused, error, permission, question, input.
+function New-Note($type, $title, $lines, $sound, $tag, $kind, [bool]$sticky) {
+    return [pscustomobject]@{
+        Type = $type; Title = $title; Lines = @($lines | Where-Object { $_ }); Sound = $sound; Tag = $tag; Kind = $kind; Sticky = $sticky
+    }
 }
 
 # "mcp__github__create_issue" -> "create_issue (github)"
@@ -251,25 +406,25 @@ function Save-PermissionState($data, [string]$pendingPath, [bool]$privacy) {
     Write-Pending $pendingPath ([string]$data.tool_name) (Get-ShortHash $raw) (Get-ToolLabel ([string]$data.tool_name)) $detail $why
 }
 
-function Get-PermissionNote($data, $pending, [string]$project) {
+function Get-PermissionNote($data, $pending, [string]$project, [bool]$privacy) {
     $lines = @()
     # Only trust a recent record, so an old permission is never shown for a different prompt.
     if ($pending -and $pending.tool -ne '*' -and (Get-AgeSeconds $pending.time) -lt 120) {
         $lines += if ($pending.detail) { "Approve $($pending.label): $($pending.detail)" } else { "Approve $($pending.label) to continue" }
         $lines += $pending.why
-    } elseif ($data.message) {
+    } elseif (-not $privacy -and $data.message) {
         $lines += Shorten ([string]$data.message) 200
     } else {
         $lines += 'Approve the request in Claude Code to continue'
     }
-    return New-Note "Claude needs permission - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
+    return New-Note 'permission' "Claude needs permission - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
 }
 
 function Get-InputNote($data, [string]$project, [bool]$privacy) {
     $lines = @()
     if (-not $privacy -and $data.message) { $lines += Shorten ([string]$data.message) 200 }
     if (-not $lines.Count) { $lines += 'An MCP server is waiting for your input' }
-    return New-Note "Claude needs your input - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
+    return New-Note 'input' "Claude needs your input - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
 }
 
 function Get-QuestionNote($data, [string]$project, [bool]$privacy) {
@@ -284,7 +439,7 @@ function Get-QuestionNote($data, [string]$project, [bool]$privacy) {
         if ($options.Count) { $lines += Shorten ('Options: ' + ($options -join ' / ')) 150 }
     }
     if (-not $lines.Count) { $lines += 'Answer the question in Claude Code to continue' }
-    return New-Note "Claude has a question - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
+    return New-Note 'question' "Claude has a question - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
 }
 
 function Get-ErrorNote($data, [string]$project, [bool]$privacy) {
@@ -301,7 +456,7 @@ function Get-ErrorNote($data, [string]$project, [bool]$privacy) {
     $lines = @()
     if ($err) { $lines += "Error: $err" } else { $lines += 'The task did not finish.' }
     $lines += $details
-    return New-Note "Claude stopped with an error - $project" $lines 'Notification.SMS' 'error' 'Error' $false
+    return New-Note 'error' "Claude stopped with an error - $project" $lines 'Notification.SMS' 'error' 'Error' $false
 }
 
 # Background tasks still in flight; Stop sends only in-flight ones, finished statuses are skipped anyway.
@@ -319,19 +474,19 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
     # Quiet for quick answers. If the start time is unknown, notify anyway.
     if ($minSeconds -gt 0 -and $last -and $last.Time) {
         $elapsed = ([datetime]::UtcNow - $last.Time).TotalSeconds
-        if ($elapsed -ge 0 -and $elapsed -lt $minSeconds) { return $null }
+        if ($elapsed -ge 0 -and $elapsed -lt $minSeconds) { Write-Log ("quiet: quick answer ({0:N0} s)" -f $elapsed); return $null }
     }
 
     $reply = [string]$data.last_assistant_message
     $lastLine = @($reply -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1
     $asking = [bool]($lastLine -and (($lastLine -replace '[\s\*_`)"]+$', '') -match '\?$'))
-    $running = Get-RunningBackgroundTasks $data.background_tasks
+    $running = @(Get-RunningBackgroundTasks $data.background_tasks)
 
     $lines = @()
     if (-not $privacy -and $last) { $lines += if ($last.Text) { 'Task: ' + (Shorten $last.Text 100) } }
 
     if ($running.Count) {
-        $title = "Claude paused - $project"; $sound = 'Notification.Default'
+        $type = 'paused'; $title = "Claude paused - $project"; $sound = 'Notification.Default'
         if (-not $privacy) { $lines += Shorten $reply 120 }
         $suffix = if ($running.Count -eq 1) { '' } else { 's' }
         $status = "$($running.Count) background task$suffix still running"
@@ -344,26 +499,31 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
         $lines += Shorten $status 120
     } elseif ($asking) {
         # Claude ended its turn with a question: show the question itself.
-        $title = "Claude is asking - $project"; $sound = 'Notification.Reminder'
+        $type = 'asking'; $title = "Claude is asking - $project"; $sound = 'Notification.Reminder'
         if (-not $privacy) { $lines += Shorten $lastLine 160 }
     } else {
-        $title = "Claude finished - $project"; $sound = 'Notification.Default'
+        $type = 'finished'; $title = "Claude finished - $project"; $sound = 'Notification.Default'
         if (-not $privacy) { $lines += Shorten $reply 120 }
     }
     if (-not @($lines | Where-Object { $_ }).Count) { $lines += if ($asking) { 'Claude is waiting for your answer' } else { 'Task completed' } }
-    return New-Note $title $lines $sound 'turn' 'Info' $false
+    return New-Note $type $title $lines $sound 'turn' 'Info' $false
 }
 
 # --- Main ---
 
 try {
-    $privacy = $env:TASK_NOTIFIER_PRIVACY -match '^(1|true|yes|on)$'
+    $privacy = Test-Flag $env:TASK_NOTIFIER_PRIVACY
     $minSeconds = 30
-    if ($env:TASK_NOTIFIER_MIN_SECONDS -match '^\d+$') { $minSeconds = [int]$env:TASK_NOTIFIER_MIN_SECONDS }
+    if (([string]$env:TASK_NOTIFIER_MIN_SECONDS).Trim() -match '^\d+$') { $minSeconds = [int]$Matches[0] }
 
     [Console]::InputEncoding = [Text.Encoding]::UTF8
     $data = [Console]::In.ReadToEnd() | ConvertFrom-Json
-    if (-not $data) { exit 0 }
+    if (-not $data) { Write-Log 'ignored: no hook input'; exit 0 }
+
+    $hookEvent = [string]$data.hook_event_name
+    $sid = ([string]$data.session_id) -replace '[^A-Za-z0-9_-]', ''
+    $script:LogTag = "$hookEvent " + $sid.Substring(0, [Math]::Min(8, $sid.Length))
+    Write-Log ((@('received', $data.notification_type, $data.tool_name) | Where-Object { $_ }) -join ' ')
 
     $cwd = [string]$data.cwd
     $project = if ($cwd) { Split-Path -Leaf $cwd } else { 'Claude Code' }
@@ -372,12 +532,15 @@ try {
     $pendingPath = Get-StatePath $data.session_id 'pending'
     $note = $null
 
-    switch ([string]$data.hook_event_name) {
+    switch ($hookEvent) {
         'UserPromptSubmit' {
             Save-PromptState $data $privacy
             Clear-Waiting $data $group
         }
-        'PermissionRequest' { Save-PermissionState $data $pendingPath $privacy }
+        'PermissionRequest' {
+            # Turned-off types record nothing, so tool calls never start PowerShell for them.
+            if (Test-Enabled 'permission') { Save-PermissionState $data $pendingPath $privacy }
+        }
         { $_ -in 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied' } {
             if (Test-PendingMatch (Read-State $pendingPath) $data) {
                 Clear-Waiting $data $group
@@ -388,24 +551,27 @@ try {
         'Notification' {
             switch ([string]$data.notification_type) {
                 'permission_prompt' {
+                    if (-not (Test-Enabled 'permission')) { break }
                     $pending = Read-State $pendingPath
-                    if ($pending) { $note = Get-PermissionNote $data $pending $project }
+                    if ($pending) { $note = Get-PermissionNote $data $pending $project $privacy }
                     elseif ((Get-AgeSeconds (Read-State (Get-StatePath $data.session_id 'answered')).time) -gt 15) {
                         # Nothing recorded and nothing just answered: a prompt without PermissionRequest,
                         # such as a sandboxed command's network request. Any tool call ends it.
                         Write-Pending $pendingPath '*' '' '' '' ''
-                        $note = Get-PermissionNote $data $null $project
+                        $note = Get-PermissionNote $data $null $project $privacy
                     }
-                    # Otherwise it was answered while this process started: no toast.
+                    else { Write-Log 'quiet: answered while starting up' }
                 }
                 { $_ -in 'elicitation_dialog', 'elicitation_url_dialog' } {
-                    Write-Pending $pendingPath '*' '' '' '' ''
-                    $note = Get-InputNote $data $project $privacy
+                    if (Test-Enabled 'input') {
+                        Write-Pending $pendingPath '*' '' '' '' ''
+                        $note = Get-InputNote $data $project $privacy
+                    }
                 }
             }
         }
         'PreToolUse' {
-            if ([string]$data.tool_name -eq 'AskUserQuestion') {
+            if ([string]$data.tool_name -eq 'AskUserQuestion' -and (Test-Enabled 'question')) {
                 # Same ~6 s grace as permission prompts: answering sooner (PostToolUse removes the
                 # marker) means you are at the screen, so no toast.
                 Write-Pending $pendingPath 'AskUserQuestion' '' '' '' ''
@@ -413,6 +579,7 @@ try {
                     Start-Sleep -Milliseconds ([Math]::Max(0, $WaitSeconds * 1000 - 1500))
                 }
                 if (Test-Path -LiteralPath $pendingPath) { $note = Get-QuestionNote $data $project $privacy }
+                else { Write-Log 'quiet: question answered within the grace period' }
             }
         }
         { $_ -in 'Stop', 'StopFailure' } {
@@ -424,16 +591,24 @@ try {
     }
 
     if (-not $note) { exit 0 }
+    if (-not (Test-Enabled $note.Type)) { Write-Log "quiet: '$($note.Type)' is not in TASK_NOTIFIER_EVENTS"; exit 0 }
+    if (Test-Watching $project) { Write-Log "quiet: you are looking at Claude ($($note.Type))"; exit 0 }
+    $launch = Get-LaunchUri $cwd
 
     if ($env:CTN_DRYRUN) {
         $flags = if ($note.Sticky) { ' sticky' } else { '' }
-        [Console]::Error.WriteLine("[$($note.Kind)/$($note.Sound)/$($note.Tag)$flags] $($note.Title)`n$($note.Lines -join "`n")`n")
+        $opens = if ($launch) { "`nclick opens: $launch" } else { '' }
+        [Console]::Error.WriteLine("[$($note.Type): $($note.Kind)/$($note.Sound)/$($note.Tag)$flags] $($note.Title)`n$($note.Lines -join "`n")$opens`n")
+        Write-Log "dry run, not shown: $($note.Type): $($note.Title)"
         exit 0
     }
 
-    try { Show-Toast $note $group $cwdKey $project }
-    catch { Show-Balloon $note.Title ($note.Lines -join "`n") $note.Kind }
+    try { Show-Toast $note $group $cwdKey $project $launch; Write-Log "shown $($note.Type): $($note.Title)" }
+    catch {
+        Write-Log "toast failed, showing a balloon instead: $($_.Exception.Message)"
+        Show-Balloon $note.Title ($note.Lines -join "`n") $note.Kind
+    }
     # Answered while the toast was being shown: take it back.
-    if ($note.Sticky -and -not (Test-Path -LiteralPath $pendingPath)) { Remove-Toast 'waiting' $group }
-} catch { }
+    if ($note.Sticky -and -not (Test-Path -LiteralPath $pendingPath)) { Remove-Toast 'waiting' $group; Write-Log 'removed: answered while showing' }
+} catch { Write-Log "error: $($_.Exception.Message)" }
 exit 0
