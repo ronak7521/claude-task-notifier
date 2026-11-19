@@ -218,6 +218,26 @@ namespace CTN {
     $anyDll = @(Get-ChildItem -LiteralPath $sb.Dir -Recurse -Filter '*.dll')
     Check 'without LOCALAPPDATA nothing is cached on disk' (($anyDll.Count -eq 0) -and ($r.Err -match 'Claude finished')) (($anyDll | ForEach-Object FullName) -join ', ')
 
+    Section 'Programs planted in the project folder'
+
+    # Hooks run in the project folder, where cmd.exe would look for programs first. A cloned repo with its own
+    # powershell.exe must not get it run. Claude Code sets NoDefaultCurrentDirectoryInExePath; the launchers must
+    # not rely on that, so the test removes it.
+    $sb = New-Sandbox 'plantedexe'
+    $proj = Join-Path $sb.Dir 'cloned-repo'
+    $null = New-Item -ItemType Directory -Force -Path $proj
+    $marker = Join-Path $sb.Dir 'PLANTED_EXE_RAN.txt'
+    $exeSrc = "public static class P { public static void Main() { System.IO.File.AppendAllText(@""$marker"", ""ran\r\n""); } }"
+    $job = Start-Job -ScriptBlock { param($src, $out) Add-Type -TypeDefinition $src -OutputAssembly $out -OutputType ConsoleApplication } -ArgumentList $exeSrc, (Join-Path $proj 'powershell.exe')
+    $null = Wait-Job $job -Timeout 60; Remove-Job $job -Force
+    Check 'test setup: planted powershell.exe was built in the project folder' (Test-Path (Join-Path $proj 'powershell.exe')) ''
+    $noGuard = @{ NoDefaultCurrentDirectoryInExePath = $null; TASK_NOTIFIER_MIN_SECONDS = '0' }
+    $r = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok'; cwd = $proj }) $noGuard '' $NotifyCmd $proj
+    Check 'notify.cmd never runs a powershell.exe from the project folder' (-not (Test-Path $marker)) 'the planted powershell.exe ran'
+    Check 'and still notifies with the real PowerShell' ($r.Err -match 'Claude finished') $r.Err
+    $r = Invoke-Hook $sb '' $noGuard 'test' (Join-Path $Scripts 'doctor.cmd') $proj
+    Check 'doctor.cmd never runs a powershell.exe from the project folder' (-not (Test-Path $marker) -and $r.Out -match 'Task Notifier doctor') 'the planted powershell.exe ran'
+
     Section 'Static checks'
 
     $src = [IO.File]::ReadAllText($NotifyPs1)
@@ -234,6 +254,21 @@ namespace CTN {
     Check 'registry writes only go to HKCU' (($src -notmatch 'HKLM:|HKEY_LOCAL_MACHINE|Registry::') -and ($src -match 'HKCU:\\Software\\Classes\\AppUserModelId\\')) ''
     Check 'every toast text goes through Format-Xml' (-not ([regex]::Matches($src, '<text>\$\((?!Format-Xml)').Count)) ''
     Check 'notify.cmd never passes hook input on the command line' (($cmd -notmatch '%\*') -and ($cmd -match '-File "%~dp0notify\.ps1"\s*\r?\n')) ''
+    $doctorCmd = [IO.File]::ReadAllText((Join-Path $Scripts 'doctor.cmd'))
+    $fullPs = '"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"'
+    foreach ($launcher in @(@('notify.cmd', $cmd), @('doctor.cmd', $doctorCmd))) {
+        $body = $launcher[1]
+        Check "$($launcher[0]) starts PowerShell only by its full Windows path" (($body.Contains($fullPs) -or $body.Contains('set "CTN_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"')) -and
+            ($body -match 'set "NoDefaultCurrentDirectoryInExePath=1"')) ''
+    }
+    Check 'doctor.cmd only reacts to the fixed word "test" and forwards no arguments' (($doctorCmd -notmatch '%\*') -and
+        ([regex]::Matches($doctorCmd, '%~?1').Count -eq 1) -and ($doctorCmd -match 'if /i "%~1"=="test"')) ''
+    $doctorSrc = [IO.File]::ReadAllText((Join-Path $Scripts 'doctor.ps1'))
+    $errors = $null; $dtokens = $null
+    $null = [Management.Automation.Language.Parser]::ParseInput($doctorSrc, [ref]$dtokens, [ref]$errors)
+    Check 'doctor.ps1 parses without errors and is ASCII only' (($errors.Count -eq 0) -and -not ([Text.Encoding]::UTF8.GetBytes($doctorSrc) | Where-Object { $_ -gt 127 })) (($errors | ForEach-Object Message) -join '; ')
+    $ddyn = @($dtokens | Where-Object { $_.Kind -eq 'Identifier' -or $_.Kind -eq 'Generic' } | Where-Object { $_.Text -match '^(Invoke-Expression|iex|Invoke-Command|icm|Start-Process|Set-ItemProperty|New-ItemProperty|Remove-Item|Set-Content)$' })
+    Check 'doctor.ps1 runs nothing and changes nothing itself (no iex, Start-Process or writes)' ($ddyn.Count -eq 0) (($ddyn | ForEach-Object Text) -join ', ')
     $hookJson = $hooks | ConvertFrom-Json
     $cmds = @($hookJson.hooks.PSObject.Properties | ForEach-Object { $_.Value } | ForEach-Object { $_.hooks } | ForEach-Object { $_ })
     Check 'all hooks use exec form (cmd.exe with fixed args, no shell string)' ((@($cmds | Where-Object { $_.command -ne 'cmd.exe' -or -not $_.args }).Count -eq 0) -and $cmds.Count -ge 10) ''

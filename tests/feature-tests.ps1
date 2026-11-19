@@ -492,6 +492,121 @@ namespace CTN {
     Check 'toast: click link opens via protocol' ($x.toast.launch -eq 'vscode://file/C:/p' -and $x.toast.activationType -eq 'protocol') ''
 
     # ------------------------------------------------------------------------------------------------
+    Section 'Locked-down PCs and launcher problems'
+
+    # ConstrainedLanguage mode (AppLocker / WDAC): simulated by switching the session before loading notify.ps1.
+    $sb = New-Sandbox 'clm'
+    $null = New-Item -ItemType Directory -Force -Path $sb.Dir
+    Set-Content (Join-Path $sb.Dir 'clm.ps1') ("`$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'`r`n. '$NotifyPs1'") -Encoding ascii
+    Set-Content (Join-Path $sb.Dir 'clm.cmd') ("@echo off`r`nset ""PSModulePath=""`r`n""%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""$(Join-Path $sb.Dir 'clm.ps1')""`r`n") -Encoding ascii
+    Set-PromptState $sb 60
+    $r = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok' }) @{} '' (Join-Path $sb.Dir 'clm.cmd')
+    $problem = Join-Path $sb.State 'last-problem.txt'
+    $text = if (Test-Path $problem) { Get-Content $problem -Raw } else { '' }
+    Check 'restricted PowerShell (ConstrainedLanguage): exits cleanly' ($r.Exit -eq 0 -and -not (Get-Shown $r.Err) -and $r.Err -notmatch 'Exception|error') $r.Err
+    Check 'restricted PowerShell: records why for the doctor' ($text -match 'ConstrainedLanguage mode' -and $text -match '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ') $text
+    $r = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok' })
+    Check 'the problem note is removed once a hook runs normally again' ((Get-Shown $r.Err) -and -not (Test-Path $problem)) ''
+
+    $sb = New-Sandbox 'nopowershell'
+    $r = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok' }) @{ SystemRoot = (Join-Path $sb.Dir 'no-windows') }
+    $problem = Join-Path $sb.State 'last-problem.txt'
+    $text = if (Test-Path $problem) { Get-Content $problem -Raw } else { '' }
+    Check 'PowerShell cannot start: the launcher still exits 0 (never blocks Claude)' ($r.Exit -eq 0) "exit $($r.Exit)"
+    Check 'PowerShell cannot start: the launcher records it for the doctor' ($text -match 'PowerShell could not run notify\.ps1 \(exit code \d+\)') $text
+
+    # ------------------------------------------------------------------------------------------------
+    Section 'Doctor and test commands (dry run)'
+
+    $DoctorCmd = Join-Path $Scripts 'doctor.cmd'
+    # Runs the doctor against a fake Claude config folder; returns its report.
+    function Invoke-Doctor($sandbox, [hashtable]$envs = @{}, [string]$arg = '', $settings = $null, $installed = $null) {
+        $config = Join-Path $sandbox.Dir 'claude-config'
+        $null = New-Item -ItemType Directory -Force -Path (Join-Path $config 'plugins')
+        if ($settings) { $settings | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $config 'settings.json') -Encoding ascii }
+        if ($installed) { $installed | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $config 'plugins\installed_plugins.json') -Encoding ascii }
+        $all = @{ CLAUDE_CONFIG_DIR = $config; TASK_NOTIFIER_WHEN_FOCUSED = $null }; foreach ($k in $envs.Keys) { $all[$k] = $envs[$k] }
+        return Invoke-Hook $sandbox '' $all $arg $DoctorCmd
+    }
+    function Get-Install([int]$copies) {
+        $list = @(1..$copies | ForEach-Object { @{ scope = 'user'; version = '1.5.0'; installPath = "C:\x\$_" } })
+        return @{ version = 2; plugins = @{ 'task-notifier@ronak-plugins' = $list } }
+    }
+
+    $sb = New-Sandbox 'doctor-ok'
+    Set-PromptState $sb 10
+    $r = Invoke-Doctor $sb @{} '' @{ enabledPlugins = @{ 'task-notifier@ronak-plugins' = $true } } (Get-Install 1)
+    Check 'doctor: runs, prints every section and a result line' ($r.Exit -eq 0 -and $r.Out -match '^Task Notifier doctor' -and
+        $r.Out -match '== Plugin ==' -and $r.Out -match '== Windows notifications ==' -and $r.Out -match '== Your settings ==' -and
+        $r.Out -match '== Focus check ==' -and $r.Out -match '== Test notification ==' -and $r.Out -match 'Result: \d+ problem\(s\), \d+ warning\(s\)\.') $r.Out
+    Check 'doctor: reports the installed copy and running hooks' ($r.Out -match '\[OK\] Installed: task-notifier@ronak-plugins 1\.5\.0 \(user\)' -and $r.Out -match '\[OK\] The plugin''s hooks are running') $r.Out
+    Check 'doctor: all types on, default 30 s, dry run shows no toast' ($r.Out -match '\[OK\] All notification types are on' -and $r.Out -match 'over 30 seconds' -and $r.Out -match 'Dry run: the test notification was not shown') $r.Out
+    Check 'doctor: every finding uses the [OK]/[INFO]/[WARN]/[FAIL] format' (@($r.Out -split "\r?\n" | Where-Object { $_ -and $_ -notmatch '^(Task Notifier doctor|== .+ ==|\[(OK|INFO|WARN|FAIL)\] .+|       .*|Result: .+)$' }).Count -eq 0) $r.Out
+
+    $sb = New-Sandbox 'doctor-nohooks'
+    $r = Invoke-Doctor $sb
+    Check 'doctor: no hook has run yet -> tells you to start a new session' ($r.Out -match '\[WARN\] No hook has run yet' -and $r.Out -match 'Reload Window') $r.Out
+    Check 'doctor: not installed from a marketplace is explained' ($r.Out -match '\[INFO\] Not installed from a marketplace') $r.Out
+
+    $sb = New-Sandbox 'doctor-old'
+    $null = New-Item -ItemType Directory -Force -Path $sb.State
+    $old = Join-Path $sb.State 'old-session.json'; Set-Content $old '{}'; (Get-Item $old).LastWriteTime = (Get-Date).AddHours(-3)
+    Check 'doctor: hooks silent for a while -> suggests a new session' ((Invoke-Doctor $sb).Out -match '\[WARN\] No hook has run in the last 15 minutes') ''
+
+    $sb = New-Sandbox 'doctor-disabled'
+    $r = Invoke-Doctor $sb @{} '' @{ enabledPlugins = @{ 'task-notifier@ronak-plugins' = $false } } (Get-Install 2)
+    Check 'doctor: plugin turned off -> FAIL with the enable command' ($r.Out -match '\[FAIL\] The plugin is turned off' -and $r.Out -match 'claude plugin enable task-notifier@ronak-plugins') $r.Out
+    Check 'doctor: installed twice -> WARN about double notifications' ($r.Out -match '\[WARN\] Installed more than once') $r.Out
+
+    $sb = New-Sandbox 'doctor-events'
+    $r = Invoke-Doctor $sb @{ TASK_NOTIFIER_EVENTS = 'nonsense' }
+    Check 'doctor: EVENTS turns everything off -> FAIL listing valid names' ($r.Out -match '\[FAIL\] TASK_NOTIFIER_EVENTS turns every notification off' -and $r.Out -match 'finished, asking, paused') $r.Out
+    $r = Invoke-Doctor $sb @{ TASK_NOTIFIER_EVENTS = 'permission,question' }
+    Check 'doctor: EVENTS with some types -> lists what is off' ($r.Out -match '\[INFO\] Turned off by TASK_NOTIFIER_EVENTS: finished, asking, paused, error, input\.') $r.Out
+
+    $sb = New-Sandbox 'doctor-settings'
+    $r = Invoke-Doctor $sb @{ TASK_NOTIFIER_MIN_SECONDS = '900'; TASK_NOTIFIER_PRIVACY = '1' } '' @{ env = @{ TASK_NOTIFIER_MIN_SECONDS = '60'; TASK_NOTIFIER_PRIVACY = '1' } }
+    Check 'doctor: very high MIN_SECONDS -> WARN' ($r.Out -match '\[WARN\] Finished notifications only for tasks over 900 seconds') $r.Out
+    Check 'doctor: settings.json changed but session not restarted -> WARN' ($r.Out -match '\[WARN\] TASK_NOTIFIER_MIN_SECONDS is "60" in settings.json but "900" in this session') $r.Out
+    Check 'doctor: matching settings are not reported as changed' ($r.Out -notmatch 'TASK_NOTIFIER_PRIVACY is "') $r.Out
+    Check 'doctor: privacy mode is mentioned' ($r.Out -match '\[INFO\] Privacy mode is on') $r.Out
+    $r = Invoke-Doctor $sb @{ TASK_NOTIFIER_DEBUG = '1' }
+    Check 'doctor: a setting from outside settings.json is INFO, not "start a new session"' ($r.Out -match '\[INFO\] TASK_NOTIFIER_DEBUG is "1", set outside' -and $r.Out -notmatch '\[WARN\] TASK_NOTIFIER_DEBUG') $r.Out
+
+    $sb = New-Sandbox 'doctor-projects'
+    $inst = @{ version = 2; plugins = @{ 'task-notifier@ronak-plugins' = @(
+        @{ scope = 'user'; version = '1.5.0' }, @{ scope = 'project'; version = '1.4.0'; projectPath = 'C:\some\other\project' }) } }
+    $r = Invoke-Doctor $sb @{} '' $null $inst
+    Check 'doctor: a project install for another folder does not count as a second copy' (($r.Out -notmatch 'Installed more than once') -and
+        ($r.Out -match '(?m)^\[OK\] Installed: task-notifier@ronak-plugins 1\.5\.0 \(user\)\r?$')) $r.Out
+
+    $doctorSrc = Get-Content (Join-Path $Scripts 'doctor.ps1') -Raw
+    Check 'doctor: does not inherit notify.ps1''s silenced errors' ($doctorSrc -match '(?s)AssignmentStatementAst.*?\$ErrorActionPreference = ''Continue''') ''
+
+    $sb = New-Sandbox 'doctor-problem'
+    $null = New-Item -ItemType Directory -Force -Path $sb.State
+    Set-Content (Join-Path $sb.State 'last-problem.txt') '2026-01-01 10:00:00 PowerShell could not run notify.ps1 (exit code 1).'
+    Check 'doctor: a recorded hook problem -> FAIL with the reason' ((Invoke-Doctor $sb).Out -match '\[FAIL\] A hook could not notify: 2026-01-01 10:00:00 PowerShell could not run') ''
+
+    $sb = New-Sandbox 'doctor-debuglog'
+    $null = New-Item -ItemType Directory -Force -Path $sb.State
+    Set-Content (Join-Path $sb.State 'debug.log') '2026-01-01 10:00:00 [Stop abc] quiet: quick answer (3 s)'
+    Check 'doctor: shows the last debug log lines' ((Invoke-Doctor $sb).Out -match '       2026-01-01 10:00:00 \[Stop abc\] quiet: quick answer') ''
+
+    $sb = New-Sandbox 'doctor-test'
+    $r = Invoke-Doctor $sb @{} 'test'
+    Check '/task-notifier:test: only Windows checks and the test notification' ($r.Out -match '== Windows notifications ==' -and $r.Out -match '== Test notification ==' -and
+        $r.Out -notmatch '== Plugin ==' -and $r.Out -notmatch '== Your settings ==' -and $r.Exit -eq 0) $r.Out
+    $r = Invoke-Doctor $sb @{} '"test & echo INJECTED"'
+    Check 'doctor launcher passes on nothing but the word "test"' ($r.Out -notmatch 'INJECTED' -and $r.Out -match '== Plugin ==') $r.Out
+
+    $sb = New-Sandbox 'doctor-clm'
+    Set-Content (Join-Path $sb.Dir 'dclm.ps1') ("`$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'`r`n. '$(Join-Path $Scripts 'doctor.ps1')'") -Encoding ascii
+    Set-Content (Join-Path $sb.Dir 'dclm.cmd') ("@echo off`r`nset ""PSModulePath=""`r`n""%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""$(Join-Path $sb.Dir 'dclm.ps1')""`r`n") -Encoding ascii
+    $r = Invoke-Hook $sb '' @{} '' (Join-Path $sb.Dir 'dclm.cmd')
+    Check 'doctor on restricted PowerShell: explains it instead of crashing' ($r.Exit -eq 0 -and $r.Out -match '\[FAIL\] PowerShell runs in ConstrainedLanguage mode' -and $r.Out -match 'Result: 1 problem') "$($r.Out) $($r.Err)"
+
+    # ------------------------------------------------------------------------------------------------
     Section 'Plugin files'
 
     $hooks = (Get-Content (Join-Path $Plugin 'hooks\hooks.json') -Raw | ConvertFrom-Json).hooks
@@ -499,8 +614,9 @@ namespace CTN {
         UserPromptSubmit = @('', $true, ''); PermissionRequest = @('', $true, ''); PreToolUse = @('AskUserQuestion', $true, '')
         Notification = @('permission_prompt|elicitation_dialog|elicitation_url_dialog', $true, '')
         PostToolUse = @('', $true, 'ifpending'); PostToolUseFailure = @('', $true, 'ifpending'); PermissionDenied = @('', $true, 'ifpending')
-        SessionEnd = @('', $false, 'ifpending'); Stop = @('', $false, ''); StopFailure = @('', $false, '')
+        SessionEnd = @('', $false, 'ifpending'); Stop = @('', $true, ''); StopFailure = @('', $true, '')
     }
+    # Only SessionEnd may make Claude wait (and only while a waiting toast exists); everything else runs in the background.
     foreach ($ev in $want.Keys) {
         $g = @($hooks.$ev); $h = if ($g.Count) { @($g[0].hooks)[0] } else { $null }
         $ok = $h -and $g.Count -eq 1 -and ([string]$g[0].matcher -eq $want[$ev][0]) -and ([bool]$h.async -eq $want[$ev][1]) -and
@@ -514,11 +630,30 @@ namespace CTN {
     Check 'plugin.json: name and version' ($manifest.name -eq 'task-notifier' -and $manifest.version -match '^\d+\.\d+\.\d+$') $manifest.version
     Check 'marketplace.json lists the plugin folder' (@($market.plugins | Where-Object { $_.name -eq 'task-notifier' -and $_.source -match 'plugins/task-notifier' }).Count -eq 1) ''
     Check 'plugin icon exists' (Test-Path (Join-Path $Plugin '.claude-plugin\icon.png')) ''
-    $readme = Get-Content (Join-Path $Plugin 'README.md') -Raw
-    $undocumented = @('TASK_NOTIFIER_MIN_SECONDS', 'TASK_NOTIFIER_PRIVACY', 'TASK_NOTIFIER_EVENTS', 'TASK_NOTIFIER_WHEN_FOCUSED', 'TASK_NOTIFIER_DEBUG' | Where-Object { $readme -notmatch $_ })
-    Check 'README documents every setting' ($undocumented.Count -eq 0) ($undocumented -join ', ')
-    $rootReadme = Get-Content (Join-Path $Repo 'README.md') -Raw
-    Check 'root README is in sync with the plugin README' ($rootReadme.EndsWith(($readme -split "`n", 2)[1])) ''
+    $readme = Get-Content (Join-Path $Repo 'README.md') -Raw
+    $settings = @([regex]::Matches((Get-Content $NotifyPs1 -Raw), '\$env:(TASK_NOTIFIER_\w+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    $undocumented = @($settings | Where-Object { $readme -notmatch "``$_``" })
+    Check "README documents every setting the script reads ($($settings.Count))" ($settings.Count -ge 5 -and $undocumented.Count -eq 0) ($undocumented -join ', ')
+    $pluginReadme = Get-Content (Join-Path $Plugin 'README.md') -Raw
+    Check 'plugin folder README links to the full README and the changelog' ($pluginReadme -match 'github\.com/ronak7521/claude-task-notifier#readme' -and $pluginReadme -match 'CHANGELOG\.md') ''
+    $changelog = Get-Content (Join-Path $Repo 'CHANGELOG.md') -Raw
+    Check "CHANGELOG has an entry for the current version $($manifest.version)" ($changelog -match "(?m)^## $([regex]::Escape($manifest.version)) - \d{4}-\d\d-\d\d$") ''
+    $attrs = Get-Content (Join-Path $Repo '.gitattributes') -Raw
+    Check '.gitattributes keeps .cmd files in CRLF' ($attrs -match '(?m)^\*\.cmd\s+text\s+eol=crlf') ''
+    $badLf = @(Get-ChildItem -Path $Repo -Recurse -Filter '*.cmd' | Where-Object { $_.FullName -notmatch '\\\.git\\' } |
+        Where-Object { [IO.File]::ReadAllText($_.FullName) -match '(?<!\r)\n' } | ForEach-Object Name)
+    Check 'every .cmd file in the working copy has CRLF line endings' ($badLf.Count -eq 0) ($badLf -join ', ')
+    $workflow = Get-Content (Join-Path $Repo '.github\workflows\tests.yml') -Raw
+    Check 'GitHub workflow runs the tests on Windows' ($workflow -match 'runs-on:\s*windows-' -and $workflow -match 'run:\s*tests\\run-tests\.cmd' -and $workflow -match 'pull_request') ''
+    foreach ($skill in @(@('doctor', $false, ''), @('test', $true, ' test'))) {
+        $md = Get-Content (Join-Path $Plugin "skills\$($skill[0])\SKILL.md") -Raw
+        $front = [regex]::Match($md, '(?s)^---\r?\n(.*?)\r?\n---').Groups[1].Value
+        $ok = ($front -match "(?m)^name: $($skill[0])$") -and ($front -match '(?m)^description: \S') -and
+              (($front -match '(?m)^disable-model-invocation: true$') -eq $skill[1]) -and
+              $md.Contains('"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.cmd"' + $skill[2])
+        Check "skill /task-notifier:$($skill[0]): front matter and launcher" $ok $front
+    }
+    Check 'README documents the slash commands' ($readme -match '/task-notifier:doctor' -and $readme -match '/task-notifier:test') ''
 
     # ------------------------------------------------------------------------------------------------
     if ($env:CTN_TEST_LIVE -eq '1') {

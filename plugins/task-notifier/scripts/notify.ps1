@@ -24,6 +24,8 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $AppId = 'ClaudeCode.TaskNotifier'
 $AppName = 'Task Notifier'
+# The plugin folder (scripts\..). doctor.ps1 loads these definitions and sets it to its own copy's folder.
+$PluginRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { '' }
 $StateDir = Join-Path $env:TEMP 'claude-task-notifier'
 # Compiled code is cached in the user profile, never in TEMP: TEMP may point to a folder other users can write to.
 $CacheDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'claude-task-notifier' } else { '' }
@@ -51,6 +53,17 @@ function Write-Log([string]$msg) {
         $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $script:LogTag, $msg
         [IO.File]::AppendAllText($log, $line + "`r`n", (New-Object Text.UTF8Encoding $false))
     } catch { }
+}
+
+# Something stops every notification (e.g. a company policy): keep the latest reason for /task-notifier:doctor.
+# Uses cmdlets only, so it also works in ConstrainedLanguage mode, where .NET calls such as [IO.File] are blocked.
+function Write-Problem([string]$msg) {
+    try {
+        $null = New-Item -ItemType Directory -Force -Path $StateDir
+        Set-Content -LiteralPath (Join-Path $StateDir 'last-problem.txt') -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $msg) -Encoding UTF8
+    } catch { }
+    # Even [Console]::Error.WriteLine is a blocked method call in ConstrainedLanguage mode.
+    if ($env:CTN_DRYRUN) { try { [Console]::Error.WriteLine("  ($msg)") } catch { } }
 }
 
 function Test-Enabled([string]$type) {
@@ -184,7 +197,7 @@ function Register-App {
     if ($cur.DisplayName -ne $AppName) {
         $null = New-ItemProperty -LiteralPath $key -Name DisplayName -Value $AppName -PropertyType String -Force
     }
-    $icon = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\.claude-plugin\icon.png'))
+    $icon = [IO.Path]::GetFullPath((Join-Path $PluginRoot '.claude-plugin\icon.png'))
     if ((Test-Path -LiteralPath $icon) -and $cur.IconUri -ne $icon) {
         $null = New-ItemProperty -LiteralPath $key -Name IconUri -Value $icon -PropertyType String -Force
     }
@@ -525,6 +538,16 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
 # --- Main ---
 
 try {
+    # Company policies (AppLocker, WDAC) can run scripts in ConstrainedLanguage mode. That blocks Windows toasts,
+    # the balloon fallback and file access alike, so say why once and stop instead of failing silently.
+    $mode = [string]$ExecutionContext.SessionState.LanguageMode
+    if ($mode -ne 'FullLanguage') {
+        Write-Problem "PowerShell runs in $mode mode on this PC (set by a security policy such as AppLocker or WDAC), so Windows notifications cannot be shown."
+        exit 0
+    }
+    $problemFile = Join-Path $StateDir 'last-problem.txt'
+    if (Test-Path -LiteralPath $problemFile) { Remove-Item -LiteralPath $problemFile -Force }
+
     $privacy = Test-Flag $env:TASK_NOTIFIER_PRIVACY
     $minSeconds = 30
     if (([string]$env:TASK_NOTIFIER_MIN_SECONDS).Trim() -match '^\d+$') { $minSeconds = [int]$Matches[0] }

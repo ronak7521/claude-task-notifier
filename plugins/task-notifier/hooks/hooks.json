@@ -32,10 +32,10 @@
       { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd", "ifpending"], "timeout": 10 } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "async": true } ] }
     ],
     "StopFailure": [
-      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "cmd.exe", "args": ["/d", "/c", "${CLAUDE_PLUGIN_ROOT}\\scripts\\notify.cmd"], "async": true } ] }
     ]
   }
 }
