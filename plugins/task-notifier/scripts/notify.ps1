@@ -236,6 +236,19 @@ namespace CTN {
     }
 }
 
+# Editor titles are parts joined by " - " (an em dash on some setups), e.g.
+# "app.ts - shop-api - Visual Studio Code". The project must be a whole part, so "api" does not match
+# a "shop-api" window. Allowed around it: the unsaved-changes dot, and a suffix such as " [WSL: Ubuntu]"
+# or " (Workspace)". Case is ignored, like Windows folder names.
+function Test-TitleShowsProject([string]$title, [string]$project) {
+    if (-not $title -or -not $project) { return $false }
+    # Separator: hyphen or em dash (U+2014); unsaved dot: U+25CF. Built from codes to keep this file ASCII.
+    $sep = '\s[-' + [char]0x2014 + ']\s'
+    $pattern = '(?:^|' + $sep + ')(?:' + [char]0x25CF + '\s*)?' + [regex]::Escape($project) +
+               '(?:\s\[[^\]]*\]|\s\([^)]*\))?(?=' + $sep + '|$)'
+    return [regex]::IsMatch($title, $pattern, 'IgnoreCase')
+}
+
 # True when the window running this Claude session is in front and you used the keyboard or mouse in
 # the last 2 minutes. Then you can see Claude yourself, so the toast would only interrupt you.
 function Test-Watching([string]$project) {
@@ -261,7 +274,7 @@ function Test-Watching([string]$project) {
         # also show this project's name in its title.
         $editor = ((Get-EditorPid) -eq [int]$fgPid) -or
                   ($env:TERM_PROGRAM -eq 'vscode' -and $name -match '^(Code|Code - Insiders|Cursor|Windsurf)$')
-        if ($editor) { return ([CTN.Native]::Title($fg) -match [regex]::Escape($project)) }
+        if ($editor) { return (Test-TitleShowsProject ([CTN.Native]::Title($fg)) $project) }
         return $false
     } catch {
         Write-Log "focus check failed: $($_.Exception.Message)"
@@ -417,14 +430,14 @@ function Get-PermissionNote($data, $pending, [string]$project, [bool]$privacy) {
     } else {
         $lines += 'Approve the request in Claude Code to continue'
     }
-    return New-Note 'permission' "Claude needs permission - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
+    return New-Note 'permission' 'Claude needs permission' $lines 'Notification.Reminder' 'waiting' 'Warning' $true
 }
 
 function Get-InputNote($data, [string]$project, [bool]$privacy) {
     $lines = @()
     if (-not $privacy -and $data.message) { $lines += Shorten ([string]$data.message) 200 }
     if (-not $lines.Count) { $lines += 'An MCP server is waiting for your input' }
-    return New-Note 'input' "Claude needs your input - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
+    return New-Note 'input' 'Claude needs your input' $lines 'Notification.Reminder' 'waiting' 'Warning' $true
 }
 
 function Get-QuestionNote($data, [string]$project, [bool]$privacy) {
@@ -439,7 +452,7 @@ function Get-QuestionNote($data, [string]$project, [bool]$privacy) {
         if ($options.Count) { $lines += Shorten ('Options: ' + ($options -join ' / ')) 150 }
     }
     if (-not $lines.Count) { $lines += 'Answer the question in Claude Code to continue' }
-    return New-Note 'question' "Claude has a question - $project" $lines 'Notification.Reminder' 'waiting' 'Warning' $true
+    return New-Note 'question' 'Claude has a question' $lines 'Notification.Reminder' 'waiting' 'Warning' $true
 }
 
 function Get-ErrorNote($data, [string]$project, [bool]$privacy) {
@@ -456,7 +469,7 @@ function Get-ErrorNote($data, [string]$project, [bool]$privacy) {
     $lines = @()
     if ($err) { $lines += "Error: $err" } else { $lines += 'The task did not finish.' }
     $lines += $details
-    return New-Note 'error' "Claude stopped with an error - $project" $lines 'Notification.SMS' 'error' 'Error' $false
+    return New-Note 'error' 'Claude stopped with an error' $lines 'Notification.SMS' 'error' 'Error' $false
 }
 
 # Background tasks still in flight; Stop sends only in-flight ones, finished statuses are skipped anyway.
@@ -486,7 +499,7 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
     if (-not $privacy -and $last) { $lines += if ($last.Text) { 'Task: ' + (Shorten $last.Text 100) } }
 
     if ($running.Count) {
-        $type = 'paused'; $title = "Claude paused - $project"; $sound = 'Notification.Default'
+        $type = 'paused'; $title = 'Claude paused'; $sound = 'Notification.Default'
         if (-not $privacy) { $lines += Shorten $reply 120 }
         $suffix = if ($running.Count -eq 1) { '' } else { 's' }
         $status = "$($running.Count) background task$suffix still running"
@@ -499,10 +512,10 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
         $lines += Shorten $status 120
     } elseif ($asking) {
         # Claude ended its turn with a question: show the question itself.
-        $type = 'asking'; $title = "Claude is asking - $project"; $sound = 'Notification.Reminder'
+        $type = 'asking'; $title = 'Claude is asking'; $sound = 'Notification.Reminder'
         if (-not $privacy) { $lines += Shorten $lastLine 160 }
     } else {
-        $type = 'finished'; $title = "Claude finished - $project"; $sound = 'Notification.Default'
+        $type = 'finished'; $title = 'Claude finished'; $sound = 'Notification.Default'
         if (-not $privacy) { $lines += Shorten $reply 120 }
     }
     if (-not @($lines | Where-Object { $_ }).Count) { $lines += if ($asking) { 'Claude is waiting for your answer' } else { 'Task completed' } }
@@ -598,15 +611,17 @@ try {
     if ($env:CTN_DRYRUN) {
         $flags = if ($note.Sticky) { ' sticky' } else { '' }
         $opens = if ($launch) { "`nclick opens: $launch" } else { '' }
-        [Console]::Error.WriteLine("[$($note.Type): $($note.Kind)/$($note.Sound)/$($note.Tag)$flags] $($note.Title)`n$($note.Lines -join "`n")$opens`n")
-        Write-Log "dry run, not shown: $($note.Type): $($note.Title)"
+        [Console]::Error.WriteLine("[$($note.Type): $($note.Kind)/$($note.Sound)/$($note.Tag)$flags] $($note.Title)`n$($note.Lines -join "`n")$opens`nheader: $project`n")
+        Write-Log "dry run, not shown: $($note.Type): $($note.Title) ($project)"
         exit 0
     }
 
-    try { Show-Toast $note $group $cwdKey $project $launch; Write-Log "shown $($note.Type): $($note.Title)" }
+    # The toast shows the project in its header, so the title leaves it out.
+    try { Show-Toast $note $group $cwdKey $project $launch; Write-Log "shown $($note.Type): $($note.Title) ($project)" }
     catch {
         Write-Log "toast failed, showing a balloon instead: $($_.Exception.Message)"
-        Show-Balloon $note.Title ($note.Lines -join "`n") $note.Kind
+        # A balloon has no header, so the project goes into its title.
+        Show-Balloon "$($note.Title) - $project" ($note.Lines -join "`n") $note.Kind
     }
     # Answered while the toast was being shown: take it back.
     if ($note.Sticky -and -not (Test-Path -LiteralPath $pendingPath)) { Remove-Toast 'waiting' $group; Write-Log 'removed: answered while showing' }

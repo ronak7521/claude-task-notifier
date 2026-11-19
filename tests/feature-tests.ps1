@@ -46,7 +46,7 @@ try {
     Section 'Finished, asking and paused (Stop)'
 
     $n = Get-StopNote 'finished' @{ last_assistant_message = "## Summary`nAll 42 tests pass now." }
-    Check 'finished: type, title and toast style' ($n -and $n.Type -eq 'finished' -and $n.Title -eq 'Claude finished - shop-api' -and
+    Check 'finished: type, title and toast style' ($n -and $n.Type -eq 'finished' -and $n.Title -eq 'Claude finished' -and $n.Header -eq 'shop-api' -and
         $n.Kind -eq 'Info' -and $n.Sound -eq 'Notification.Default' -and $n.Tag -eq 'turn' -and -not $n.Sticky) "$($n | Out-String)"
     Check 'finished: shows your prompt and the start of the reply' ($n.Lines[0] -eq 'Task: Fix the login bug' -and $n.Lines[1] -eq 'All 42 tests pass now.') ($n.Lines -join ' | ')
     Check 'finished: Markdown heading lines are dropped' (-not ($n.Lines -match 'Summary')) ($n.Lines -join ' | ')
@@ -63,7 +63,7 @@ try {
 
     foreach ($ask in @('Should I also update the docs?', '**Ready to deploy?**', 'Run `npm test` now?', 'Shall I continue? ', '(want me to commit?)')) {
         $n = Get-StopNote 'asking' @{ last_assistant_message = "I fixed the bug.`n`n$ask" }
-        Check "asking: '$ask' is recognised as a question" ($n.Type -eq 'asking' -and $n.Title -eq 'Claude is asking - shop-api' -and $n.Sound -eq 'Notification.Reminder' -and -not $n.Sticky) "$($n.Type)"
+        Check "asking: '$ask' is recognised as a question" ($n.Type -eq 'asking' -and $n.Title -eq 'Claude is asking' -and $n.Header -eq 'shop-api' -and $n.Sound -eq 'Notification.Reminder' -and -not $n.Sticky) "$($n.Type)"
     }
     $n = Get-StopNote 'askingline' @{ last_assistant_message = "Done with step 1.`nShould I also update the docs?" }
     Check 'asking: shows the question itself' ($n.Lines[-1] -eq 'Should I also update the docs?') ($n.Lines -join ' | ')
@@ -74,7 +74,7 @@ try {
 
     $one = @(@{ id = '1'; type = 'local_bash'; status = 'running'; description = 'npm run watch' }, @{ id = '2'; status = 'completed'; description = 'old build' })
     $n = Get-StopNote 'paused1' @{ last_assistant_message = 'Watcher started.'; background_tasks = $one }
-    Check 'paused: type, title and sound' ($n.Type -eq 'paused' -and $n.Title -eq 'Claude paused - shop-api' -and $n.Sound -eq 'Notification.Default') "$($n.Type)"
+    Check 'paused: type, title and sound' ($n.Type -eq 'paused' -and $n.Title -eq 'Claude paused' -and $n.Header -eq 'shop-api' -and $n.Sound -eq 'Notification.Default') "$($n.Type)"
     Check 'paused: names the running task, skips finished ones' ($n.Lines[-1] -eq '1 background task still running: npm run watch') ($n.Lines -join ' | ')
     $two = @(@{ status = 'running'; description = 'dev server' }, @{ status = 'pending'; command = 'pytest -x' }, @{ status = 'running'; type = 'agent' })
     $n = Get-StopNote 'paused3' @{ last_assistant_message = 'ok'; background_tasks = $two }
@@ -86,7 +86,7 @@ try {
     $sb = New-Sandbox 'nocwd'
     $p = New-Payload 'Stop' @{ last_assistant_message = 'ok' }; $p.Remove('cwd')
     $n = Get-Shown (Invoke-Hook $sb $p).Err
-    Check 'no project folder: title says "Claude Code"' ($n.Title -eq 'Claude finished - Claude Code') $n.Title
+    Check 'no project folder: header says "Claude Code"' ($n.Title -eq 'Claude finished' -and $n.Header -eq 'Claude Code') "$($n.Title) | $($n.Header)"
 
     # ------------------------------------------------------------------------------------------------
     Section 'Quick answers (TASK_NOTIFIER_MIN_SECONDS)'
@@ -117,7 +117,7 @@ try {
         return Get-Shown (Invoke-Hook $sb (New-Payload 'StopFailure' $fields) $envs).Err
     }
     $n = Get-ErrorShown @{ error = 'rate_limit'; last_assistant_message = 'API Error: Rate limit reached' }
-    Check 'error: type, title and its own sound' ($n.Type -eq 'error' -and $n.Title -eq 'Claude stopped with an error - shop-api' -and
+    Check 'error: type, title and its own sound' ($n.Type -eq 'error' -and $n.Title -eq 'Claude stopped with an error' -and $n.Header -eq 'shop-api' -and
         $n.Kind -eq 'Error' -and $n.Sound -eq 'Notification.SMS' -and $n.Tag -eq 'error' -and -not $n.Sticky) "$($n | Out-String)"
     Check 'error: known code is readable, repeated details skipped' (($n.Lines -join '|') -eq 'Error: Rate limit reached') ($n.Lines -join ' | ')
     $n = Get-ErrorShown @{ error = 'server_error'; error_details = 'upstream connect timeout'; last_assistant_message = 'ignored' }
@@ -135,7 +135,7 @@ try {
     $r = Invoke-Hook $sb (New-Payload 'PermissionRequest' $bash)
     Check 'PermissionRequest shows nothing yet but records what it is for' ((-not (Get-Shown $r.Err)) -and (Test-PendingFile $sb)) $r.Err
     $n = Get-Shown (Invoke-Hook $sb (New-Payload 'Notification' @{ notification_type = 'permission_prompt'; message = 'Claude needs your permission to use Bash' })).Err
-    Check 'permission: sticky reminder toast' ($n.Type -eq 'permission' -and $n.Title -eq 'Claude needs permission - shop-api' -and $n.Sticky -and
+    Check 'permission: sticky reminder toast' ($n.Type -eq 'permission' -and $n.Title -eq 'Claude needs permission' -and $n.Header -eq 'shop-api' -and $n.Sticky -and
         $n.Sound -eq 'Notification.Reminder' -and $n.Tag -eq 'waiting' -and $n.Kind -eq 'Warning') "$($n | Out-String)"
     Check 'permission: shows the command and its description' (($n.Lines -join '|') -eq 'Approve Bash: npm publish --access public|Publish the package') ($n.Lines -join ' | ')
     $null = Invoke-Hook $sb (New-Payload 'PostToolUse' @{ tool_name = 'Read'; tool_input = @{ file_path = 'C:\x\a.txt' } }) @{} 'ifpending'
@@ -189,7 +189,7 @@ try {
         @{ question = 'Add tests?'; header = 'Tests'; options = @(@{ label = 'Yes' }) }) } }
     $sb = New-Sandbox 'question'
     $n = Get-Shown (Invoke-Hook $sb (New-Payload 'PreToolUse' $qs)).Err
-    Check 'question: sticky reminder toast' ($n.Type -eq 'question' -and $n.Title -eq 'Claude has a question - shop-api' -and $n.Sticky -and $n.Tag -eq 'waiting' -and $n.Sound -eq 'Notification.Reminder') "$($n | Out-String)"
+    Check 'question: sticky reminder toast' ($n.Type -eq 'question' -and $n.Title -eq 'Claude has a question' -and $n.Header -eq 'shop-api' -and $n.Sticky -and $n.Tag -eq 'waiting' -and $n.Sound -eq 'Notification.Reminder') "$($n | Out-String)"
     Check 'question: first question, count of the rest, and options' (($n.Lines -join '|') -eq 'Which database should I use? (+1 more)|Options: PostgreSQL / SQLite') ($n.Lines -join ' | ')
     $null = Invoke-Hook $sb (New-Payload 'PostToolUse' $qs) @{} 'ifpending'
     Check 'answering the question clears the waiting toast' (-not (Test-PendingFile $sb)) ''
@@ -206,7 +206,7 @@ try {
     foreach ($t in @('elicitation_dialog', 'elicitation_url_dialog')) {
         $sb = New-Sandbox "input-$t"
         $n = Get-Shown (Invoke-Hook $sb (New-Payload 'Notification' @{ notification_type = $t; message = 'Sign in to Jira to continue' })).Err
-        Check "$t`: sticky input toast with the server's message" ($n.Type -eq 'input' -and $n.Title -eq 'Claude needs your input - shop-api' -and $n.Sticky -and $n.Lines[0] -eq 'Sign in to Jira to continue') "$($n | Out-String)"
+        Check "$t`: sticky input toast with the server's message" ($n.Type -eq 'input' -and $n.Title -eq 'Claude needs your input' -and $n.Header -eq 'shop-api' -and $n.Sticky -and $n.Lines[0] -eq 'Sign in to Jira to continue') "$($n | Out-String)"
         $null = Invoke-Hook $sb (New-Payload 'PostToolUse' @{ tool_name = 'mcp__jira__search' }) @{} 'ifpending'
         Check "$t`: cleared by the next tool call" (-not (Test-PendingFile $sb)) ''
     }
@@ -360,6 +360,39 @@ namespace CTN {
     Check 'a different VS Code (other VSCODE_PID) in front -> notify' (-not (Watching @{ VSCODE_PID = '4' })) ''
     Set-Screen -fg 100 -procId $PID -title 'shopXapi - Visual Studio Code'
     Check 'project name is matched literally, not as a pattern' (-not (Watching @{ VSCODE_PID = [string]$PID } 'shop.api')) ''
+    Set-Screen -fg 100 -procId $PID -title 'app.ts - shop-api - Visual Studio Code'
+    Check 'project "api" is not fooled by a "shop-api" window -> notify' (-not (Watching @{ VSCODE_PID = [string]$PID } 'api')) ''
+
+    # Editor window titles: is the project a whole part of the title?
+    $dash = [string][char]0x2014; $dot = [string][char]0x25CF
+    $titles = @(
+        @('shop-api', 'app.ts - shop-api - Visual Studio Code', $true),
+        @('shop-api', 'shop-api - Visual Studio Code', $true),
+        @('shop-api', "$dot app.ts - shop-api - Visual Studio Code", $true),
+        @('shop-api', "$dot shop-api - Visual Studio Code", $true),
+        @('shop-api', 'app.ts - shop-api [WSL: Ubuntu] - Visual Studio Code', $true),
+        @('shop-api', 'app.ts - shop-api [SSH: build-box] - Visual Studio Code', $true),
+        @('shop-api', 'app.ts - shop-api (Workspace) - Visual Studio Code', $true),
+        @('shop-api', 'app.ts - shop-api - Work Profile - Visual Studio Code', $true),
+        @('shop-api', 'app.ts - shop-api - Visual Studio Code [Administrator]', $true),
+        @('shop-api', 'app.ts - shop-api - Cursor', $true),
+        @('shop-api', "app.ts $dash shop-api $dash Visual Studio Code", $true),
+        @('Shop-API', 'app.ts - shop-api - Visual Studio Code', $true),
+        @('my - project', 'app.ts - my - project - Visual Studio Code', $true),
+        @('api', 'app.ts - shop-api - Visual Studio Code', $false),
+        @('api', 'app.ts - api-gateway - Visual Studio Code', $false),
+        @('shop', 'app.ts - shop-api - Visual Studio Code', $false),
+        @('shop-api', 'app.ts - shop-api-v2 - Visual Studio Code', $false),
+        @('shop-api', 'app.ts - old shop-api - Visual Studio Code', $false),
+        @('shop-api', 'Welcome - Visual Studio Code', $false),
+        @('shop-api', '', $false),
+        @('', 'app.ts - shop-api - Visual Studio Code', $false)
+    )
+    foreach ($t in $titles) {
+        $got = Test-TitleShowsProject $t[1] $t[0]
+        $verb = if ($t[2]) { 'matches' } else { 'does not match' }
+        Check "project '$($t[0])' $verb title '$($t[1])'" ($got -eq $t[2]) "got $got"
+    }
     Set-Screen -fg 100 -procId 999999999
     Check 'window of a process that is gone -> notify, no error' (-not (Watching @{ VSCODE_PID = [string]$PID })) ''
     $editor = Get-Process -Name 'Code', 'Cursor', 'Windsurf' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -386,7 +419,7 @@ namespace CTN {
     Set-PromptState $sb 60
     $null = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok' }) @{ TASK_NOTIFIER_DEBUG = 'true' }
     $log = [IO.File]::ReadAllText((Join-Path $sb.State 'debug.log'))
-    Check 'debug log: time, event, session and decision on each line' ($log -match '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[Stop test-ses\] received' -and $log -match 'finished: Claude finished - shop-api') $log
+    Check 'debug log: time, event, session and decision on each line' ($log -match '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[Stop test-ses\] received' -and $log -match 'finished: Claude finished \(shop-api\)') $log
     $sb = New-Sandbox 'nodebug'
     Set-PromptState $sb 60
     $null = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok' }) @{ TASK_NOTIFIER_DEBUG = '0' }
@@ -413,7 +446,7 @@ namespace CTN {
     $null = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok'; cwd = "C:\work\$cafe" }) @{ TASK_NOTIFIER_MIN_SECONDS = '0'; TASK_NOTIFIER_DEBUG = '1' }
     $state = [IO.File]::ReadAllText((Join-Path $sb.State 'test-session-1.json'), [Text.Encoding]::UTF8)
     Check 'non-English text survives (prompt state)' ($state.Contains("Fix the $cafe menu")) $state
-    Check 'non-English project names survive (toast title)' ([IO.File]::ReadAllText((Join-Path $sb.State 'debug.log'), [Text.Encoding]::UTF8).Contains("Claude finished - $cafe")) ''
+    Check 'non-English project names survive (toast header)' ([IO.File]::ReadAllText((Join-Path $sb.State 'debug.log'), [Text.Encoding]::UTF8).Contains("Claude finished ($cafe)")) ''
 
     $sb = New-Sandbox 'unknown'
     $r = Invoke-Hook $sb (New-Payload 'SomeFutureEvent' @{})

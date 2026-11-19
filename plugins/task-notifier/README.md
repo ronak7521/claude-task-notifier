@@ -26,8 +26,8 @@ Notifications are modern Windows toasts:
 - Each type has its own sound: the normal sound when finished, a reminder sound when Claude is waiting for you,
   and a different sound for errors.
 - **Quiet while you watch**: no toast while the window running Claude is in front of you and you used the
-  keyboard or mouse in the last 2 minutes. In VS Code the window title must show the project name, so another
-  project's window does not count. In Windows Terminal any of its windows counts, since the active tab is unknown.
+  keyboard or mouse in the last 2 minutes. In VS Code the window title must show the project's folder name as a
+  whole part of the title, so another project's window does not count, not even `shop-api` for a project `api`. In Windows Terminal any of its windows counts, since the active tab is unknown.
 - **Click to open**: in VS Code (and Cursor or Windsurf), clicking a toast opens the project's window.
   In a plain terminal, clicking just dismisses it.
 
