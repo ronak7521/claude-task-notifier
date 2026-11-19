@@ -85,8 +85,9 @@ function Get-Shown([string]$stderr) {
     return [pscustomobject]@{
         Type = $m.Groups[1].Value; Kind = $m.Groups[2].Value; Sound = $m.Groups[3].Value; Tag = $m.Groups[4].Value
         Sticky = $m.Groups[5].Success; Title = $m.Groups[6].Value
-        Lines = @($lines | Where-Object { $_ -notlike 'click opens: *' })
+        Lines = @($lines | Where-Object { $_ -notlike 'click opens: *' -and $_ -notlike 'header: *' })
         Launch = (@($lines | Where-Object { $_ -like 'click opens: *' }) | ForEach-Object { $_.Substring(13) }) -join ''
+        Header = (@($lines | Where-Object { $_ -like 'header: *' }) | ForEach-Object { $_.Substring(8) }) -join ''
     }
 }
 
