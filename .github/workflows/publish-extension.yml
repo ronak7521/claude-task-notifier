@@ -41,7 +41,8 @@ jobs:
           npx --yes @vscode/vsce@4.1.0 package --target win32-arm64
 
       - name: Publish
-        run: npx --yes @vscode/vsce@4.1.0 publish --oidc --packagePath *.vsix
+        # --skip-duplicate: a build already uploaded (e.g. by hand) is skipped instead of failing the rest.
+        run: npx --yes @vscode/vsce@4.1.0 publish --oidc --skip-duplicate --packagePath *.vsix
 
       - uses: actions/upload-artifact@v4
         with:
