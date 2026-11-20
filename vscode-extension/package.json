@@ -1,0 +1,87 @@
+{
+  "name": "task-notifier",
+  "displayName": "Task Notifier for Claude Code",
+  "description": "Windows notifications when Claude Code finishes a task, hits an error, or waits for your permission or answer.",
+  "version": "1.0.0",
+  "publisher": "RonakChotaliya",
+  "license": "MIT",
+  "icon": "icon.png",
+  "homepage": "https://github.com/ronak7521/claude-task-notifier#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ronak7521/claude-task-notifier.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ronak7521/claude-task-notifier/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "notification",
+    "toast",
+    "windows"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "taskNotifier.test",
+        "title": "Send Test Notification",
+        "category": "Task Notifier"
+      },
+      {
+        "command": "taskNotifier.doctor",
+        "title": "Diagnose Missing Notifications",
+        "category": "Task Notifier"
+      },
+      {
+        "command": "taskNotifier.install",
+        "title": "Install or Repair Claude Code Plugin",
+        "category": "Task Notifier"
+      },
+      {
+        "command": "taskNotifier.update",
+        "title": "Update Claude Code Plugin",
+        "category": "Task Notifier"
+      },
+      {
+        "command": "taskNotifier.uninstall",
+        "title": "Remove Claude Code Plugin",
+        "category": "Task Notifier"
+      }
+    ],
+    "configuration": {
+      "title": "Task Notifier",
+      "properties": {
+        "taskNotifier.claudePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Full path to `claude.exe` (or `claude.cmd`). Leave empty to use the one from the Claude Code extension, `%USERPROFILE%\\.local\\bin` or PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "package": "npx --yes @vscode/vsce@4.1.0 package --target win32-x64 && npx --yes @vscode/vsce@4.1.0 package --target win32-arm64"
+  }
+}

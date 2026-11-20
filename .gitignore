@@ -1,1 +1,3 @@
 .vs/
+*.vsix
+node_modules/

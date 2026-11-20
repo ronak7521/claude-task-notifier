@@ -636,7 +636,8 @@ namespace CTN {
     Check "README documents every setting the script reads ($($settings.Count))" ($settings.Count -ge 5 -and $undocumented.Count -eq 0) ($undocumented -join ', ')
     $pluginReadme = Get-Content (Join-Path $Plugin 'README.md') -Raw
     Check 'plugin folder README links to the full README and the changelog' ($pluginReadme -match 'github\.com/ronak7521/claude-task-notifier#readme' -and $pluginReadme -match 'CHANGELOG\.md') ''
-    $changelog = Get-Content (Join-Path $Repo 'CHANGELOG.md') -Raw
+    # Strip CR: a checkout with core.autocrlf=true (the default on Windows and on GitHub's runner) has CRLF, and (?m)$ does not match before \r.
+    $changelog = (Get-Content (Join-Path $Repo 'CHANGELOG.md') -Raw) -replace '\r', ''
     Check "CHANGELOG has an entry for the current version $($manifest.version)" ($changelog -match "(?m)^## $([regex]::Escape($manifest.version)) - \d{4}-\d\d-\d\d$") ''
     $attrs = Get-Content (Join-Path $Repo '.gitattributes') -Raw
     Check '.gitattributes keeps .cmd files in CRLF' ($attrs -match '(?m)^\*\.cmd\s+text\s+eol=crlf') ''
@@ -646,8 +647,8 @@ namespace CTN {
     $workflow = Get-Content (Join-Path $Repo '.github\workflows\tests.yml') -Raw
     Check 'GitHub workflow runs the tests on Windows' ($workflow -match 'runs-on:\s*windows-' -and $workflow -match 'run:\s*tests\\run-tests\.cmd' -and $workflow -match 'pull_request') ''
     foreach ($skill in @(@('doctor', $false, ''), @('test', $true, ' test'))) {
-        $md = Get-Content (Join-Path $Plugin "skills\$($skill[0])\SKILL.md") -Raw
-        $front = [regex]::Match($md, '(?s)^---\r?\n(.*?)\r?\n---').Groups[1].Value
+        $md = (Get-Content (Join-Path $Plugin "skills\$($skill[0])\SKILL.md") -Raw) -replace '\r', ''
+        $front = [regex]::Match($md, '(?s)^---\n(.*?)\n---').Groups[1].Value
         $ok = ($front -match "(?m)^name: $($skill[0])$") -and ($front -match '(?m)^description: \S') -and
               (($front -match '(?m)^disable-model-invocation: true$') -eq $skill[1]) -and
               $md.Contains('"${CLAUDE_PLUGIN_ROOT}/scripts/doctor.cmd"' + $skill[2])
