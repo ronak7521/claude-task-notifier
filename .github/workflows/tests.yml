@@ -1,0 +1,41 @@
+# Runs the feature and security tests (tests\run-tests.cmd) in Windows PowerShell 5.1,
+# the engine the plugin uses, on every pull request and every push to main.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Windows PowerShell 5.1
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run feature and security tests
+        shell: cmd
+        env:
+          # A plain long path: the runner's TEMP uses an 8.3 short name (RUNNER~1).
+          CTN_TEST_ROOT: ${{ runner.temp }}
+        run: tests\run-tests.cmd
+
+      # Test file patterns ("test/**/*.test.js") need Node 21 or later.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run VS Code extension tests
+        shell: cmd
+        working-directory: vscode-extension
+        run: node --test "test/**/*.test.js"

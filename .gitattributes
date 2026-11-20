@@ -1,0 +1,9 @@
+# Store text with LF line endings in the repository; check out with the platform default.
+* text=auto
+
+# cmd.exe misreads batch files with LF-only line endings, so always check them out with CRLF,
+# even for users whose git does not convert line endings (core.autocrlf=false).
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.png binary

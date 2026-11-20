@@ -1,0 +1,49 @@
+# Publishes the VS Code extension (vscode-extension/) to the Visual Studio Marketplace.
+# Run it by hand from the Actions tab after raising "version" in vscode-extension/package.json.
+# Uses Marketplace Trusted Publishing (OIDC), so no access token is stored in the repository.
+name: Publish VS Code extension
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-extension
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Must match the Environment in the Marketplace trusted publishing policy.
+    environment: vscode-marketplace
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: vscode-extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test
+        run: node --test "test/**/*.test.js"
+
+      - name: Package for Windows x64 and ARM64
+        run: |
+          npx --yes @vscode/vsce@4.1.0 package --target win32-x64
+          npx --yes @vscode/vsce@4.1.0 package --target win32-arm64
+
+      - name: Publish
+        run: npx --yes @vscode/vsce@4.1.0 publish --oidc --packagePath *.vsix
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: vscode-extension/*.vsix

@@ -9,7 +9,9 @@ $Plugin = Join-Path $Repo 'plugins\task-notifier'
 $Scripts = Join-Path $Plugin 'scripts'
 $NotifyCmd = Join-Path $Scripts 'notify.cmd'
 $NotifyPs1 = Join-Path $Scripts 'notify.ps1'
-$Root = Join-Path ([IO.Path]::GetTempPath()) ('ctn-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+# CTN_TEST_ROOT picks the folder for the throwaway sandboxes (CI sets it); default is TEMP.
+$base = if ($env:CTN_TEST_ROOT) { $env:CTN_TEST_ROOT } else { [IO.Path]::GetTempPath() }
+$Root = Join-Path $base ('ctn-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $script:Failed = 0
 $script:Passed = 0
 $script:Skipped = 0
@@ -35,9 +37,11 @@ function New-Sandbox([string]$name) {
 # Runs notify.cmd like Claude Code does: payload on stdin, hook settings in the environment.
 # Inherited editor/terminal and TASK_NOTIFIER_* variables are removed so results do not depend on this machine.
 # The focus check is off by default (TASK_NOTIFIER_WHEN_FOCUSED=1); pass it as $null to turn it on.
-function Invoke-Hook($sandbox, $payload, [hashtable]$envs = @{}, [string]$arg = '') {
+# -launcher runs another .cmd (e.g. doctor.cmd); -cwd sets the working folder (hooks run in the project folder).
+function Invoke-Hook($sandbox, $payload, [hashtable]$envs = @{}, [string]$arg = '', [string]$launcher = $NotifyCmd, [string]$cwd = '') {
     $psi = New-Object Diagnostics.ProcessStartInfo 'cmd.exe'
-    $psi.Arguments = '/d /s /c ""' + $NotifyCmd + '"' + $(if ($arg) { " $arg" }) + '"'
+    $psi.Arguments = '/d /s /c ""' + $launcher + '"' + $(if ($arg) { " $arg" }) + '"'
+    if ($cwd) { $psi.WorkingDirectory = $cwd }
     $psi.UseShellExecute = $false
     $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true

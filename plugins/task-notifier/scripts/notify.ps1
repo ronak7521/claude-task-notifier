@@ -24,6 +24,8 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $AppId = 'ClaudeCode.TaskNotifier'
 $AppName = 'Task Notifier'
+# The plugin folder (scripts\..). doctor.ps1 loads these definitions and sets it to its own copy's folder.
+$PluginRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { '' }
 $StateDir = Join-Path $env:TEMP 'claude-task-notifier'
 # Compiled code is cached in the user profile, never in TEMP: TEMP may point to a folder other users can write to.
 $CacheDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'claude-task-notifier' } else { '' }
@@ -31,6 +33,9 @@ $WaitSeconds = 6
 $AwaySeconds = 120
 $NativeVersion = 1
 $script:LogTag = ''
+# When this hook fired: the process start time, taken before PowerShell's ~1 s start-up. Hooks run in the
+# background, so the next turn's hooks can overtake a Stop hook; state files carry this time to tell them apart.
+$HookTime = try { [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime() } catch { [datetime]::UtcNow }
 
 # On/off settings accept 1, true, yes or on, ignoring case and surrounding spaces.
 function Test-Flag([string]$value) { return $value.Trim() -match '^(1|true|yes|on)$' }
@@ -51,6 +56,17 @@ function Write-Log([string]$msg) {
         $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $script:LogTag, $msg
         [IO.File]::AppendAllText($log, $line + "`r`n", (New-Object Text.UTF8Encoding $false))
     } catch { }
+}
+
+# Something stops every notification (e.g. a company policy): keep the latest reason for /task-notifier:doctor.
+# Uses cmdlets only, so it also works in ConstrainedLanguage mode, where .NET calls such as [IO.File] are blocked.
+function Write-Problem([string]$msg) {
+    try {
+        $null = New-Item -ItemType Directory -Force -Path $StateDir
+        Set-Content -LiteralPath (Join-Path $StateDir 'last-problem.txt') -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $msg) -Encoding UTF8
+    } catch { }
+    # Even [Console]::Error.WriteLine is a blocked method call in ConstrainedLanguage mode.
+    if ($env:CTN_DRYRUN) { try { [Console]::Error.WriteLine("  ($msg)") } catch { } }
 }
 
 function Test-Enabled([string]$type) {
@@ -125,7 +141,7 @@ function Read-State([string]$path) {
 
 function Save-PromptState($data, [bool]$privacy) {
     $text = if ($privacy) { '' } else { [string]$data.prompt }
-    Write-State (Get-StatePath $data.session_id 'json') @{ time = [datetime]::UtcNow.ToString('o'); prompt = $text }
+    Write-State (Get-StatePath $data.session_id 'json') @{ time = $HookTime.ToString('o'); prompt = $text }
     # Forget sessions untouched for a week. Markers left by a session that ended mid-dialog would make every
     # tool call start PowerShell, so drop them after 2 hours (the toast itself is still removed at Stop).
     $now = Get-Date
@@ -143,7 +159,7 @@ function Get-ShortHash([string]$s) {
 }
 
 function Write-Pending([string]$path, [string]$tool, [string]$match, [string]$label, [string]$detail, [string]$why) {
-    Write-State $path @{ time = [datetime]::UtcNow.ToString('o'); tool = $tool; match = $match; label = $label; detail = $detail; why = $why }
+    Write-State $path @{ time = $HookTime.ToString('o'); tool = $tool; match = $match; label = $label; detail = $detail; why = $why }
 }
 
 # Is this tool call the one we are waiting on? Parallel tool calls finish while another waits for
@@ -171,8 +187,14 @@ function Remove-Toast([string]$tag, [string]$group) {
 }
 
 # You answered (or the turn ended): drop the sticky toast and what it was about.
-function Clear-Waiting($data, [string]$group) {
-    Remove-Item -LiteralPath (Get-StatePath $data.session_id 'pending') -Force
+# -OnlyOlder (Stop): keep a marker from a hook that fired after this one, i.e. the next turn's.
+function Clear-Waiting($data, [string]$group, [switch]$OnlyOlder) {
+    $path = Get-StatePath $data.session_id 'pending'
+    if ($OnlyOlder -and $HookTime) {
+        $since = ConvertTo-Utc (Read-State $path).time
+        if ($since -and $since -gt $HookTime) { Write-Log 'kept: the waiting marker belongs to the next turn'; return }
+    }
+    Remove-Item -LiteralPath $path -Force
     Remove-Toast 'waiting' $group
 }
 
@@ -184,7 +206,7 @@ function Register-App {
     if ($cur.DisplayName -ne $AppName) {
         $null = New-ItemProperty -LiteralPath $key -Name DisplayName -Value $AppName -PropertyType String -Force
     }
-    $icon = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\.claude-plugin\icon.png'))
+    $icon = [IO.Path]::GetFullPath((Join-Path $PluginRoot '.claude-plugin\icon.png'))
     if ((Test-Path -LiteralPath $icon) -and $cur.IconUri -ne $icon) {
         $null = New-ItemProperty -LiteralPath $key -Name IconUri -Value $icon -PropertyType String -Force
     }
@@ -483,6 +505,8 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
     $last = $null
     $state = Read-State (Get-StatePath $data.session_id 'json')
     if ($state) { $last = [pscustomobject]@{ Text = [string]$state.prompt; Time = (ConvertTo-Utc $state.time) } }
+    # A queued prompt started the next turn before this hook ran: Claude is busy again, so "finished" would be wrong.
+    if ($HookTime -and $last -and $last.Time -and $last.Time -gt $HookTime) { Write-Log 'quiet: the next prompt already started'; return $null }
 
     # Quiet for quick answers. If the start time is unknown, notify anyway.
     if ($minSeconds -gt 0 -and $last -and $last.Time) {
@@ -525,6 +549,16 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
 # --- Main ---
 
 try {
+    # Company policies (AppLocker, WDAC) can run scripts in ConstrainedLanguage mode. That blocks Windows toasts,
+    # the balloon fallback and file access alike, so say why once and stop instead of failing silently.
+    $mode = [string]$ExecutionContext.SessionState.LanguageMode
+    if ($mode -ne 'FullLanguage') {
+        Write-Problem "PowerShell runs in $mode mode on this PC (set by a security policy such as AppLocker or WDAC), so Windows notifications cannot be shown."
+        exit 0
+    }
+    $problemFile = Join-Path $StateDir 'last-problem.txt'
+    if (Test-Path -LiteralPath $problemFile) { Remove-Item -LiteralPath $problemFile -Force }
+
     $privacy = Test-Flag $env:TASK_NOTIFIER_PRIVACY
     $minSeconds = 30
     if (([string]$env:TASK_NOTIFIER_MIN_SECONDS).Trim() -match '^\d+$') { $minSeconds = [int]$Matches[0] }
@@ -597,7 +631,7 @@ try {
         }
         { $_ -in 'Stop', 'StopFailure' } {
             # The turn is over, so any permission or question it waited on is resolved.
-            Clear-Waiting $data $group
+            Clear-Waiting $data $group -OnlyOlder
             $note = if ($_ -eq 'StopFailure') { Get-ErrorNote $data $project $privacy }
                     else { Get-TurnNote $data $project $privacy $minSeconds }
         }

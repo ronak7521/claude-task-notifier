@@ -1,6 +1,9 @@
 # Task Notifier for Claude Code
 
+[![Tests](https://github.com/ronak7521/claude-task-notifier/actions/workflows/tests.yml/badge.svg)](https://github.com/ronak7521/claude-task-notifier/actions/workflows/tests.yml)
+
 This repository is a Claude Code plugin marketplace. The plugin lives in [`plugins/task-notifier`](plugins/task-notifier).
+What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
 Windows notifications from Claude Code, so you can work in another window instead of watching the chat.
 **Windows only, Claude Code only** (terminal and the VS Code extension; hooks do not run in claude.ai chat or Cowork).
@@ -38,7 +41,15 @@ Notifications are modern Windows toasts:
 /plugin marketplace add ronak7521/claude-task-notifier
 /plugin install task-notifier@ronak-plugins
 ```
-Start a new Claude Code session afterwards.
+Start a new Claude Code session afterwards (in VS Code: **Developer: Reload Window**). Then run
+`/task-notifier:test` to check that a notification appears.
+
+## Commands
+- `/task-notifier:test` sends a test notification and checks the Windows notification settings.
+- `/task-notifier:doctor` explains why notifications do not appear: whether the plugin is installed, turned on and
+  its hooks are running, Windows and company settings that block notifications, your own settings that keep some quiet
+  on purpose, and the last debug log lines. It ends with a test notification. Claude may also run it by itself when
+  you say notifications are missing. Neither command changes any setting.
 
 ## Options (optional)
 Add to the `env` block of `~/.claude/settings.json`, then start a new session:
@@ -66,7 +77,7 @@ The hooks print nothing and never block or change what Claude does. The plugin d
 
 | Hook | What it does |
 |---|---|
-| `Stop`, `StopFailure` | Finished, asking, paused and error toasts. Runs in the foreground (about 2 s at the end of a turn) so it also works in `claude -p` runs. |
+| `Stop`, `StopFailure` | Finished, asking, paused and error toasts. |
 | `PermissionRequest` | Remembers what the permission is for. |
 | `Notification` | Shows the permission or input toast once a dialog has waited about 6 seconds. |
 | `PreToolUse` (`AskUserQuestion`) | Shows the question toast once the question has waited about 6 seconds. |
@@ -74,11 +85,14 @@ The hooks print nothing and never block or change what Claude does. The plugin d
 | `UserPromptSubmit` | Saves when your task started, so quick answers stay silent. |
 | `SessionEnd` | Clears anything still waiting when you quit mid-dialog. Only starts PowerShell if needed. |
 
-All except `Stop`, `StopFailure` and `SessionEnd` run in the background (`async`). Hooks start `cmd.exe` directly
+All except `SessionEnd` run in the background (`async`), so Claude never waits for a notification. Starting
+PowerShell takes about a second, which would otherwise delay the end of every turn. Claude Code stops background
+hooks when a scripted `claude -p` run exits, so those runs do not notify. Hooks start `cmd.exe` directly
 (exec form), so they work with or without Git Bash installed.
 
 - Small state files live in `%TEMP%\claude-task-notifier`: your prompt time and text (time only in privacy
-  mode) and what a pending permission is for. Files older than 7 days are deleted automatically.
+  mode) and what a pending permission is for. Files older than 7 days are deleted automatically. If something
+  stops every notification, such as a company policy, `last-problem.txt` there says why (the doctor shows it).
 - `%LOCALAPPDATA%\claude-task-notifier` caches `ctn-native-1.dll`, a tiny helper compiled on your machine on
   first use that asks Windows which window is in front (it makes the focus check take 20 ms instead of 700 ms).
   It is kept in your user profile, not in TEMP, because TEMP can point to a folder other users can write to.
@@ -105,9 +119,12 @@ Remove-Item "$env:TEMP\claude-task-notifier", "$env:LOCALAPPDATA\claude-task-not
   every folder name.
 - Privacy mode and the debug log never contain prompt, reply, command, question or error text.
 - The registry entry is under HKCU only; no admin rights, nothing machine-wide.
+- Hooks run in your project folder, where Windows would look for programs first. The launchers start PowerShell by
+  its full Windows path, so a `powershell.exe` placed in a cloned repository is never run.
 
 ## Tests
-The repository (not the installed plugin) has two test suites. Run them before a release:
+The repository (not the installed plugin) has two test suites. GitHub runs them on every pull request and
+every push to `main` (see the badge at the top). To run them yourself:
 ```
 tests\run-tests.cmd          all tests, no toasts shown
 tests\run-tests.cmd live     also shows and removes one real toast
@@ -122,8 +139,13 @@ They run the real launcher in dry-run mode inside a throwaway TEMP folder, so th
 state and registry untouched. Exit code 0 means everything passed.
 
 ## Troubleshooting
-- Nothing appears: check Do not disturb and Settings > System > Notifications (allow **Task Notifier**).
-  Then set `TASK_NOTIFIER_DEBUG=1`, start a new session and read `debug.log`: it says why each toast stayed quiet.
+- Nothing appears: run `/task-notifier:doctor`. It checks the install, the hooks, Windows and your settings, and
+  sends a test notification. For more detail, set `TASK_NOTIFIER_DEBUG=1`, start a new session and read
+  `debug.log`: it says why each toast stayed quiet.
+- `/task-notifier:...` commands are unknown: the plugin is not installed or the session started before the install
+  (`claude plugin list` shows what is installed).
+- Company PCs: a security policy (AppLocker or WDAC) can run PowerShell scripts in a restricted mode in which
+  Windows notifications cannot be shown, or block them entirely. The doctor reports this; only IT can allow it.
 - "AuthorizationManager check failed": run `Get-ExecutionPolicy -List`; a Group Policy may block scripts.
 - After unzipping a download, run `Get-ChildItem <folder> -Recurse | Unblock-File`.
 - To test without showing anything, pipe a hook payload into `scripts\notify.cmd` with `CTN_DRYRUN=1` set;
