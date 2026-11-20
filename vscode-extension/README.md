@@ -46,6 +46,43 @@ Notification options (minimum task length, privacy mode, which types to show) ar
 `taskNotifier.claudePath`: full path to `claude.exe`, if the extension cannot find it. It can only be set in your
 user settings, not by a workspace.
 
+## Troubleshooting
+
+### The extension is installed, but no notifications appear and the plugin is not in Claude Code
+
+The extension is only the installer. The notifications come from the **Task Notifier plugin** for Claude Code,
+and it is installed only after you click **Install** in the "Install it now?" message. That message is easy to miss:
+
+- VS Code hides messages after a few seconds and moves them to the **bell icon** at the bottom right.
+- With **Do Not Disturb** turned on, messages are not shown at all.
+
+Closing or ignoring the message installs nothing. It comes back the next time VS Code starts, unless you picked
+**Don't Ask Again**.
+
+To install the plugin now:
+
+1. Press **Ctrl+Shift+P** and run **Task Notifier: Install or Repair Claude Code Plugin**.
+2. Click **Reload Window** when asked, and restart any Claude Code session running in a terminal.
+3. Run **Task Notifier: Send Test Notification**. A "Task Notifier" toast should appear.
+
+To check it worked, run `claude plugin list` in a terminal, or `/plugin` in Claude Code. You should see
+`task-notifier@ronak-plugins`.
+
+### Seeing what the extension did
+
+Open **View → Output** and pick **Task Notifier** in the drop-down. It shows every `claude` command the extension
+ran and what it printed.
+
+### "Task Notifier could not find Claude Code"
+
+Install the Claude Code extension or CLI. If it is installed somewhere unusual, set `taskNotifier.claudePath` in your
+user settings to the full path of `claude.exe`.
+
+### Still no toasts after the plugin is installed
+
+Run **Task Notifier: Diagnose Missing Notifications**. It checks Windows notification settings, Focus Assist,
+company policies and your Claude Code settings, and says what to change.
+
 ## Privacy
 
 Nothing is sent anywhere. The extension only runs Claude Code's plugin commands and the plugin's own check
