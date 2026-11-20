@@ -61,15 +61,35 @@ function commandFor(claudePath, args, systemRoot) {
 }
 
 /**
+ * The JSON array in CLI output that may have notices before or after it, even ones such as "[warn] ...":
+ * tries each line that starts with "[" up to each line that ends with "]", longest first.
+ * @param {string} text
+ * @returns {any[]|null}
+ */
+function findJsonArray(text) {
+    const starts = [...text.matchAll(/^[ \t]*\[/gm)].map((m) => m.index + m[0].length - 1);
+    const ends = [...text.matchAll(/\][ \t]*\r?$/gm)].map((m) => m.index).reverse();
+    for (const s of starts) {
+        for (const e of ends) {
+            if (e < s) continue;
+            try {
+                const v = JSON.parse(text.slice(s, e + 1));
+                // A list of plugin records: objects only, so a notice such as "[1]" is not taken for it.
+                if (Array.isArray(v) && v.every((x) => x && typeof x === 'object' && !Array.isArray(x))) return v;
+            } catch { /* not this pair */ }
+        }
+    }
+    return null;
+}
+
+/**
  * Reads `claude plugin list --json`.
  * @param {string} stdout
  * @returns {{installed: boolean, enabled: boolean, version: string, installPath: string, scope: string}}
  */
 function parsePluginList(stdout) {
-    const start = stdout.indexOf('[');
-    if (start < 0) throw new Error('claude plugin list did not return JSON');
-    const all = JSON.parse(stdout.slice(start));
-    if (!Array.isArray(all)) throw new Error('claude plugin list did not return a list');
+    const all = findJsonArray(String(stdout));
+    if (!all) throw new Error('claude plugin list did not return a JSON list');
     const mine = all.filter((p) => p && p.id === PLUGIN_ID);
     const user = mine.find((p) => p.scope === 'user') || mine[0];
     if (!user) return { installed: false, enabled: false, version: '', installPath: '', scope: '' };
@@ -95,5 +115,5 @@ function doctorScript(installPath, exists) {
 
 module.exports = {
     PLUGIN_NAME, MARKETPLACE_NAME, MARKETPLACE_SOURCE, PLUGIN_ID, ARGS,
-    claudeCandidates, findClaude, commandFor, parsePluginList, doctorScript,
+    claudeCandidates, findClaude, commandFor, findJsonArray, parsePluginList, doctorScript,
 };

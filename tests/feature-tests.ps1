@@ -110,6 +110,37 @@ try {
     Check 'errors notify even for quick answers' ((Get-Shown (Invoke-Hook $sb (New-Payload 'StopFailure' @{ error = 'rate_limit' })).Err).Type -eq 'error') ''
 
     # ------------------------------------------------------------------------------------------------
+    Section 'Overlapping turns (hooks run in the background)'
+
+    # A queued prompt starts the next turn right after Stop fires, so its hooks can save state before the slower
+    # Stop hook runs. A state time later than now stands for "written by a hook that fired after this Stop".
+    $sb = New-Sandbox 'overlap'
+    $before = [datetime]::UtcNow
+    $null = Invoke-Hook $sb (New-Payload 'UserPromptSubmit' @{ prompt = 'next' })
+    $saved = ConvertTo-Utc (Get-Content (Join-Path $sb.State 'test-session-1.json') -Raw | ConvertFrom-Json).time
+    Check 'prompt time is when the hook fired (process start), not when PowerShell got to it' ($saved -ge $before.AddSeconds(-1) -and $saved -le [datetime]::UtcNow) "$saved"
+    Set-PromptState $sb -30 'the next prompt'
+    $r = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'Done.' }) @{ TASK_NOTIFIER_MIN_SECONDS = '0' }
+    Check 'Stop after the next prompt already started: no "finished" toast' ((-not (Get-Shown $r.Err)) -and $r.Err -match 'next prompt already started') $r.Err
+    $r = Invoke-Hook $sb (New-Payload 'StopFailure' @{ error = 'rate_limit' })
+    Check 'an error still notifies when the next prompt already started' ((Get-Shown $r.Err).Type -eq 'error') $r.Err
+
+    foreach ($case in @(@{ name = 'next turn'; offset = 30; kept = $true }, @{ name = 'this turn'; offset = -30; kept = $false })) {
+        $sb = New-Sandbox 'overlap-pending'
+        $null = New-Item -ItemType Directory -Force -Path $sb.State
+        $marker = @{ time = [datetime]::UtcNow.AddSeconds($case.offset).ToString('o'); tool = 'Bash'; match = 'x'; label = 'Bash'; detail = 'ls'; why = '' } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText((Join-Path $sb.State 'test-session-1.pending'), $marker)
+        $r = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'Done.' })
+        $verb = if ($case.kept) { 'keeps' } else { 'clears' }
+        Check "Stop $verb a waiting marker from the $($case.name)" ((Test-PendingFile $sb) -eq $case.kept) $r.Err
+    }
+    $sb = New-Sandbox 'overlap-ups'
+    $null = New-Item -ItemType Directory -Force -Path $sb.State
+    [IO.File]::WriteAllText((Join-Path $sb.State 'test-session-1.pending'), (@{ time = [datetime]::UtcNow.AddSeconds(30).ToString('o'); tool = '*' } | ConvertTo-Json -Compress))
+    $null = Invoke-Hook $sb (New-Payload 'UserPromptSubmit' @{ prompt = 'x' })
+    Check 'a new prompt still clears any waiting marker' (-not (Test-PendingFile $sb)) ''
+
+    # ------------------------------------------------------------------------------------------------
     Section 'Errors (StopFailure)'
 
     function Get-ErrorShown([hashtable]$fields, [hashtable]$envs = @{}) {
@@ -515,6 +546,19 @@ namespace CTN {
     Check 'PowerShell cannot start: the launcher still exits 0 (never blocks Claude)' ($r.Exit -eq 0) "exit $($r.Exit)"
     Check 'PowerShell cannot start: the launcher records it for the doctor' ($text -match 'PowerShell could not run notify\.ps1 \(exit code \d+\)') $text
 
+    # A crash or a kill by a security policy gives a negative exit code (NTSTATUS), e.g. 0xC0000135.
+    $sb = New-Sandbox 'pscrash'
+    $fakeRoot = Join-Path $sb.Dir 'windows'
+    $psDir = Join-Path $fakeRoot 'System32\WindowsPowerShell\v1.0'
+    $null = New-Item -ItemType Directory -Force -Path $psDir
+    Add-Type -TypeDefinition 'public static class P { public static int Main() { return unchecked((int)0xC0000135); } }' -OutputAssembly (Join-Path $psDir 'powershell.exe') -OutputType ConsoleApplication
+    $r = Invoke-Hook $sb (New-Payload 'Stop' @{ last_assistant_message = 'ok' }) @{ SystemRoot = $fakeRoot }
+    $problem = Join-Path $sb.State 'last-problem.txt'
+    $text = if (Test-Path $problem) { Get-Content $problem -Raw } else { '' }
+    Check 'PowerShell crashes with a negative exit code: still recorded, launcher exits 0' ($r.Exit -eq 0 -and $text -match 'exit code -1073741515') $text
+    $r = Invoke-Hook $sb '' @{ SystemRoot = $fakeRoot } '' (Join-Path $Scripts 'doctor.cmd')
+    Check 'doctor launcher reports a negative exit code too' ($r.Exit -eq 0 -and $r.Out -match '\[FAIL\] PowerShell could not run the doctor script \(exit code -1073741515\)') $r.Out
+
     # ------------------------------------------------------------------------------------------------
     Section 'Doctor and test commands (dry run)'
 
@@ -525,7 +569,8 @@ namespace CTN {
         $null = New-Item -ItemType Directory -Force -Path (Join-Path $config 'plugins')
         if ($settings) { $settings | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $config 'settings.json') -Encoding ascii }
         if ($installed) { $installed | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $config 'plugins\installed_plugins.json') -Encoding ascii }
-        $all = @{ CLAUDE_CONFIG_DIR = $config; TASK_NOTIFIER_WHEN_FOCUSED = $null }; foreach ($k in $envs.Keys) { $all[$k] = $envs[$k] }
+        # As if run by Claude Code (CLAUDECODE=1); pass CLAUDECODE = $null for a run from outside, like the VS Code extension.
+        $all = @{ CLAUDE_CONFIG_DIR = $config; TASK_NOTIFIER_WHEN_FOCUSED = $null; CLAUDECODE = '1' }; foreach ($k in $envs.Keys) { $all[$k] = $envs[$k] }
         return Invoke-Hook $sandbox '' $all $arg $DoctorCmd
     }
     function Get-Install([int]$copies) {
@@ -579,6 +624,19 @@ namespace CTN {
     $r = Invoke-Doctor $sb @{} '' $null $inst
     Check 'doctor: a project install for another folder does not count as a second copy' (($r.Out -notmatch 'Installed more than once') -and
         ($r.Out -match '(?m)^\[OK\] Installed: task-notifier@ronak-plugins 1\.5\.0 \(user\)\r?$')) $r.Out
+
+    # Outside a Claude Code session (the VS Code extension's command): no session settings, no project folder.
+    $sb = New-Sandbox 'doctor-outside'
+    $saved = @{ env = @{ TASK_NOTIFIER_MIN_SECONDS = '900'; TASK_NOTIFIER_EVENTS = 'permission' } }
+    $r = Invoke-Doctor $sb @{ CLAUDECODE = $null } '' $saved $inst
+    Check 'doctor outside a session: says it uses settings.json' ($r.Out -match '\[INFO\] Run outside Claude Code: these checks use the env block') $r.Out
+    Check 'doctor outside a session: saved settings are not "changed, start a new session"' ($r.Out -notmatch 'in settings.json but' -and $r.Out -notmatch 'set outside') $r.Out
+    Check 'doctor outside a session: judges the saved values' ($r.Out -match '\[WARN\] Finished notifications only for tasks over 900 seconds' -and
+        $r.Out -match '\[INFO\] Turned off by TASK_NOTIFIER_EVENTS: finished, asking, paused, error, question, input\.') $r.Out
+    Check 'doctor outside a session: project installs are listed, not counted' ($r.Out -match '\[INFO\] Also installed for the project C:\\some\\other\\project' -and
+        $r.Out -match '(?m)^\[OK\] Installed: task-notifier@ronak-plugins 1\.5\.0 \(user\)\r?$' -and $r.Out -notmatch 'Installed more than once') $r.Out
+    $r = Invoke-Doctor $sb @{ CLAUDECODE = $null; TASK_NOTIFIER_MIN_SECONDS = '5' } '' @{ env = @{} }
+    Check 'doctor outside a session: falls back to the Windows environment when nothing is saved' ($r.Out -match 'over 5 seconds') $r.Out
 
     $doctorSrc = Get-Content (Join-Path $Scripts 'doctor.ps1') -Raw
     Check 'doctor: does not inherit notify.ps1''s silenced errors' ($doctorSrc -match '(?s)AssignmentStatementAst.*?\$ErrorActionPreference = ''Continue''') ''

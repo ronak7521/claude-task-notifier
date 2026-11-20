@@ -10,13 +10,17 @@ the version is in [`plugin.json`](plugins/task-notifier/.claude-plugin/plugin.js
 - `/task-notifier:doctor` explains why notifications do not appear (install, hooks, Windows and company settings,
   your own settings, debug log) and sends a test notification. Claude can also run it when you report missing notifications.
 - Company PCs: when a security policy runs PowerShell in restricted (ConstrainedLanguage) mode, or PowerShell cannot
-  run the script at all, the reason is recorded for the doctor instead of failing silently.
+  run the script at all (including a crash or a kill by a security policy), the reason is recorded for the doctor
+  instead of failing silently.
 - Tests run automatically on GitHub (Windows PowerShell 5.1) for every pull request and every push to `main`.
 - This changelog, and release tags for every version.
 
 ### Changed
 - Claude no longer waits about 2 seconds at the end of every turn: the `Stop` and `StopFailure` hooks run in the
-  background like the others. Scripted `claude -p` runs no longer notify.
+  background like the others. Scripted `claude -p` runs no longer notify. When a queued prompt starts the next
+  turn at once, there is no "finished" toast, and the next turn's waiting toast keeps its details.
+- The doctor also works outside a Claude Code session (for example from the VS Code extension): it then checks the
+  settings saved in `~/.claude/settings.json`.
 - One README: the repository README is the full guide; the plugin folder's README links to it.
 - `.gitattributes` keeps `.cmd` files in CRLF line endings for everyone, so the launcher works whatever
   the user's git settings are.

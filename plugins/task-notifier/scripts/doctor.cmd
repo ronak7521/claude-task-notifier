@@ -9,5 +9,5 @@ if /i "%~1"=="test" (
 ) else (
   "%CTN_PS%" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0doctor.ps1"
 )
-if errorlevel 1 echo [FAIL] PowerShell could not run the doctor script ^(exit code %ERRORLEVEL%^). A company policy may block PowerShell scripts.
+if %ERRORLEVEL% NEQ 0 echo [FAIL] PowerShell could not run the doctor script ^(exit code %ERRORLEVEL%^). A company policy may block PowerShell scripts.
 exit /b 0

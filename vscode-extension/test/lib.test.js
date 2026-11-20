@@ -89,6 +89,14 @@ test('not installed, or another marketplace with the same plugin name', () => {
     assert.equal(lib.parsePluginList('[]').installed, false);
 });
 
+test('reads the list between notices, even ones in brackets', () => {
+    const pretty = JSON.stringify(JSON.parse(LIST), null, 2);
+    assert.equal(lib.parsePluginList(`[warn] A new version is available\n${pretty}\n[info] done\n`).version, '1.5.0');
+    assert.equal(lib.parsePluginList(`${LIST}\r\nUpdate available: run claude update\r\n`).version, '1.5.0');
+    assert.equal(lib.parsePluginList('[notice] nothing\n[]\n').installed, false);
+    assert.equal(lib.parsePluginList(`[1]\n${LIST}`).version, '1.5.0');
+});
+
 test('bad output from the CLI is an error, not "not installed"', () => {
     assert.throws(() => lib.parsePluginList('error: unknown command'), /JSON/);
     assert.throws(() => lib.parsePluginList('[not json'));
@@ -110,4 +118,12 @@ test('package.json: commands, Windows-only targets and a machine-scoped claude p
     assert.equal(pkg.contributes.configuration.properties['taskNotifier.claudePath'].scope, 'machine');
     assert.match(pkg.scripts.package, /--target win32-x64/);
     assert.deepEqual(pkg.extensionKind, ['ui']);
+});
+
+test('extension.js: the doctor runs as "outside a session", and a failed catalog refresh is an error', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+    // The doctor reads CLAUDECODE to decide whether it runs inside Claude Code.
+    assert.match(src, /toUpperCase\(\) === 'CLAUDECODE'\) delete env\[k\]/);
+    assert.match(src, /refresh\.code !== 0\) throw/);
+    assert.match(src, /cwd: os\.homedir\(\)/);
 });

@@ -33,6 +33,9 @@ $WaitSeconds = 6
 $AwaySeconds = 120
 $NativeVersion = 1
 $script:LogTag = ''
+# When this hook fired: the process start time, taken before PowerShell's ~1 s start-up. Hooks run in the
+# background, so the next turn's hooks can overtake a Stop hook; state files carry this time to tell them apart.
+$HookTime = try { [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime() } catch { [datetime]::UtcNow }
 
 # On/off settings accept 1, true, yes or on, ignoring case and surrounding spaces.
 function Test-Flag([string]$value) { return $value.Trim() -match '^(1|true|yes|on)$' }
@@ -138,7 +141,7 @@ function Read-State([string]$path) {
 
 function Save-PromptState($data, [bool]$privacy) {
     $text = if ($privacy) { '' } else { [string]$data.prompt }
-    Write-State (Get-StatePath $data.session_id 'json') @{ time = [datetime]::UtcNow.ToString('o'); prompt = $text }
+    Write-State (Get-StatePath $data.session_id 'json') @{ time = $HookTime.ToString('o'); prompt = $text }
     # Forget sessions untouched for a week. Markers left by a session that ended mid-dialog would make every
     # tool call start PowerShell, so drop them after 2 hours (the toast itself is still removed at Stop).
     $now = Get-Date
@@ -156,7 +159,7 @@ function Get-ShortHash([string]$s) {
 }
 
 function Write-Pending([string]$path, [string]$tool, [string]$match, [string]$label, [string]$detail, [string]$why) {
-    Write-State $path @{ time = [datetime]::UtcNow.ToString('o'); tool = $tool; match = $match; label = $label; detail = $detail; why = $why }
+    Write-State $path @{ time = $HookTime.ToString('o'); tool = $tool; match = $match; label = $label; detail = $detail; why = $why }
 }
 
 # Is this tool call the one we are waiting on? Parallel tool calls finish while another waits for
@@ -184,8 +187,14 @@ function Remove-Toast([string]$tag, [string]$group) {
 }
 
 # You answered (or the turn ended): drop the sticky toast and what it was about.
-function Clear-Waiting($data, [string]$group) {
-    Remove-Item -LiteralPath (Get-StatePath $data.session_id 'pending') -Force
+# -OnlyOlder (Stop): keep a marker from a hook that fired after this one, i.e. the next turn's.
+function Clear-Waiting($data, [string]$group, [switch]$OnlyOlder) {
+    $path = Get-StatePath $data.session_id 'pending'
+    if ($OnlyOlder -and $HookTime) {
+        $since = ConvertTo-Utc (Read-State $path).time
+        if ($since -and $since -gt $HookTime) { Write-Log 'kept: the waiting marker belongs to the next turn'; return }
+    }
+    Remove-Item -LiteralPath $path -Force
     Remove-Toast 'waiting' $group
 }
 
@@ -496,6 +505,8 @@ function Get-TurnNote($data, [string]$project, [bool]$privacy, [int]$minSeconds)
     $last = $null
     $state = Read-State (Get-StatePath $data.session_id 'json')
     if ($state) { $last = [pscustomobject]@{ Text = [string]$state.prompt; Time = (ConvertTo-Utc $state.time) } }
+    # A queued prompt started the next turn before this hook ran: Claude is busy again, so "finished" would be wrong.
+    if ($HookTime -and $last -and $last.Time -and $last.Time -gt $HookTime) { Write-Log 'quiet: the next prompt already started'; return $null }
 
     # Quiet for quick answers. If the start time is unknown, notify anyway.
     if ($minSeconds -gt 0 -and $last -and $last.Time) {
@@ -620,7 +631,7 @@ try {
         }
         { $_ -in 'Stop', 'StopFailure' } {
             # The turn is over, so any permission or question it waited on is resolved.
-            Clear-Waiting $data $group
+            Clear-Waiting $data $group -OnlyOlder
             $note = if ($_ -eq 'StopFailure') { Get-ErrorNote $data $project $privacy }
                     else { Get-TurnNote $data $project $privacy $minSeconds }
         }

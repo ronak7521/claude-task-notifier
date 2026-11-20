@@ -50,6 +50,9 @@ foreach ($st in $ast.EndBlock.Statements) {
 $PluginRoot = Split-Path -Parent $PSScriptRoot
 # notify.ps1 silences errors (a hook must never print); the doctor should not hide them.
 $ErrorActionPreference = 'Continue'
+# Claude Code marks the shells it starts. Without it (e.g. the VS Code extension's command), this process has
+# neither the session's settings nor its project folder, so those checks use settings.json and skip the folder.
+$InSession = [bool]$env:CLAUDECODE
 
 function Send-TestToast {
     if ($env:CTN_DRYRUN) { Say 'INFO' 'Dry run: the test notification was not shown.'; return }
@@ -137,9 +140,11 @@ if (Test-Path -LiteralPath $installedFile) {
     try {
         $list = (Get-Content -LiteralPath $installedFile -Raw | ConvertFrom-Json).plugins
         # Only copies that load here: user-wide ones, and project ones for this folder (not other projects).
+        # Outside a session the folder is unknown, so project copies are only listed.
         $here = (Get-Location).Path.TrimEnd('\')
         foreach ($p in $list.PSObject.Properties | Where-Object { $_.Name -like 'task-notifier@*' }) {
             foreach ($i in @($p.Value)) {
+                if ($i.projectPath -and -not $InSession) { Say 'INFO' "Also installed for the project $($i.projectPath) ($($p.Name) $($i.version))."; continue }
                 if ($i.projectPath -and ([string]$i.projectPath).TrimEnd('\') -ne $here) { continue }
                 $installed += "$($p.Name) $($i.version) ($($i.scope))"
             }
@@ -193,7 +198,13 @@ Test-WindowsSide
 Section 'Your settings'
 $names = 'TASK_NOTIFIER_EVENTS', 'TASK_NOTIFIER_MIN_SECONDS', 'TASK_NOTIFIER_PRIVACY', 'TASK_NOTIFIER_WHEN_FOCUSED', 'TASK_NOTIFIER_DEBUG'
 $saved = if ($settings -and $settings.env) { $settings.env } else { $null }
+if (-not $InSession) {
+    # Hooks get settings.json's env block on top of the Windows environment: check what they will see.
+    Say 'INFO' 'Run outside Claude Code: these checks use the env block of ~/.claude/settings.json (project settings are not included).'
+    foreach ($n in $names) { if ($saved -and [string]$saved.$n) { [Environment]::SetEnvironmentVariable($n, [string]$saved.$n) } }
+}
 foreach ($n in $names) {
+    if (-not $InSession) { break }
     $now = [string][Environment]::GetEnvironmentVariable($n)
     $inFile = if ($saved) { [string]$saved.$n } else { '' }
     # A saved value that is not active means the session started before it was saved. A value set elsewhere
@@ -231,7 +242,7 @@ Section 'Focus check'
 try {
     Initialize-Native
     Say 'OK' 'The focus check works (it can tell whether Claude''s window is in front).'
-    if (Test-Watching (Split-Path -Leaf (Get-Location).Path)) {
+    if ($InSession -and (Test-Watching (Split-Path -Leaf (Get-Location).Path))) {
         Say 'INFO' 'Right now you are looking at Claude, so finished notifications would stay quiet until you switch away.'
     }
 } catch {

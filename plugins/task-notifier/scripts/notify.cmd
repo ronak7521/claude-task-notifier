@@ -10,7 +10,8 @@ rem inherited from the parent process (causes "AuthorizationManager check failed
 set "PSModulePath="
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0notify.ps1"
 rem notify.ps1 always exits 0, so any other code means PowerShell could not run it. Leave a note for the doctor.
-if errorlevel 1 (
+rem Compare with NEQ: a crash or a process killed by a security policy gives a negative code, which "if errorlevel 1" misses.
+if %ERRORLEVEL% NEQ 0 (
   if not exist "%TEMP%\claude-task-notifier\" mkdir "%TEMP%\claude-task-notifier" 2>nul
   >"%TEMP%\claude-task-notifier\last-problem.txt" echo %DATE% %TIME% PowerShell could not run notify.ps1 ^(exit code %ERRORLEVEL%^). A company policy may block PowerShell scripts.
 )

@@ -30,6 +30,11 @@ jobs:
           CTN_TEST_ROOT: ${{ runner.temp }}
         run: tests\run-tests.cmd
 
+      # Test file patterns ("test/**/*.test.js") need Node 21 or later.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Run VS Code extension tests
         shell: cmd
         working-directory: vscode-extension

@@ -32,6 +32,9 @@ function findClaude() {
  * @returns {Promise<{code: number, stdout: string, stderr: string}>}
  */
 function run(file, args, verbatim, timeoutMs) {
+    // CLAUDECODE marks a Claude Code session; VS Code may have inherited it if it was started from one.
+    const env = { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' };
+    for (const k of Object.keys(env)) if (k.toUpperCase() === 'CLAUDECODE') delete env[k];
     return new Promise((resolve) => {
         execFile(file, args, {
             cwd: os.homedir(),
@@ -39,7 +42,7 @@ function run(file, args, verbatim, timeoutMs) {
             windowsVerbatimArguments: verbatim,
             timeout: timeoutMs,
             maxBuffer: 4 * 1024 * 1024,
-            env: { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' },
+            env,
         }, (err, stdout, stderr) => {
             const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
             if (err && typeof err.code !== 'number') stderr = `${stderr}\n${err.message}`;
@@ -98,7 +101,9 @@ async function update() {
     const s = await status(claudePath);
     if (!s.installed) return install();
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Updating Task Notifier...' }, async () => {
-        await claude(claudePath, lib.ARGS.updateMarketplace);
+        // Without a fresh catalog, "update" finds nothing new and we would wrongly say it is the latest.
+        const refresh = await claude(claudePath, lib.ARGS.updateMarketplace);
+        if (refresh.code !== 0) throw new Error('Could not check for a new version (is GitHub reachable?). See the "Task Notifier" output for details.');
         const r = await claude(claudePath, lib.ARGS.update);
         if (r.code !== 0) throw new Error('claude plugin update failed. See the "Task Notifier" output for details.');
     });
