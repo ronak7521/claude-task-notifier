@@ -126,10 +126,14 @@ function claudeSettingsPath() {
 function ensureAutoUpdate() {
     try {
         if (vscode.workspace.getConfiguration('taskNotifier').get('autoUpdatePlugin') === false) return;
-        const file = claudeSettingsPath();
+        let file = claudeSettingsPath();
+        // Write to the real file, so a symlinked settings.json (e.g. from a dotfiles repo) stays a link.
+        try { file = fs.realpathSync(file); } catch { /* does not exist yet */ }
         let text = null;
         try { text = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-        const r = lib.declareAutoUpdate(text);
+        let known = null;
+        try { known = fs.readFileSync(path.join(path.dirname(claudeSettingsPath()), 'plugins', 'known_marketplaces.json'), 'utf8'); } catch { /* not there yet */ }
+        const r = lib.declareAutoUpdate(text, lib.registeredAutoUpdate(known));
         if (!r.changed) { log(`Plugin auto-update: ${r.reason}.`); return; }
         fs.mkdirSync(path.dirname(file), { recursive: true });
         const tmp = `${file}.task-notifier.tmp`;
@@ -221,9 +225,23 @@ async function doctor(testOnly) {
     else if (testOnly) vscode.window.showInformationMessage('Test notification sent. Did a "Task Notifier" toast appear?');
 }
 
+// Covers a dialog left open for a while; an older lock is from a crashed window.
+const STARTUP_LOCK_STALE_MS = 10 * 60 * 1000;
+
 /** On start-up: say if Claude Code is missing, else offer to install the plugin, unless the user said no. */
 async function checkOnStartup(context) {
     if (context.globalState.get(DECLINED_KEY)) return;
+    // Every open window runs this; only one may show the dialog and install, or installs collide.
+    const release = lib.tryLock(path.join(os.tmpdir(), 'task-notifier-vscode-startup.lock'), STARTUP_LOCK_STALE_MS, fs);
+    if (!release) { log('Start-up check skipped: another VS Code window is running it.'); return; }
+    try {
+        await startupCheck(context);
+    } finally {
+        release();
+    }
+}
+
+async function startupCheck(context) {
     const claudePath = findClaude();
     if (!claudePath) {
         if (await reportNoClaude(true) === "Don't Ask Again") await context.globalState.update(DECLINED_KEY, true);

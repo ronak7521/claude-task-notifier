@@ -71,6 +71,15 @@ To install the plugin now:
 To check it worked, run `claude plugin list` in a terminal, or `/plugin` in Claude Code. You should see
 `task-notifier@ronak-plugins`.
 
+### Administrator or normal user
+
+Neither the extension nor the plugin needs administrator rights: everything is installed for your Windows account
+only (`~/.claude`, `%TEMP%`, `HKCU`). Each account that uses Claude Code installs the plugin for itself.
+
+If you run VS Code **as administrator**, notifications still appear, but clicking one cannot bring up the window:
+Windows does not let the link reach an elevated VS Code, and VS Code says another instance is running as
+administrator. Switch to the window yourself, or run VS Code normally.
+
 ### Seeing what the extension did
 
 Open **View → Output** and pick **Task Notifier** in the drop-down. It shows every `claude` command the extension

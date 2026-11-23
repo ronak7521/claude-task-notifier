@@ -44,7 +44,7 @@ Notifications are modern Windows toasts:
 Start a new Claude Code session afterwards (in VS Code: **Developer: Reload Window**). Then run
 `/task-notifier:test` to check that a notification appears.
 
-Or install the **Task Notifier for Claude Code** extension from the VS Code Marketplace: it asks once and runs these
+Or install the **Task Notifier for Claude Code** extension from the VS Code Marketplace: it offers to run these
 steps for you, and turns on auto-update.
 
 ### Updates
@@ -166,6 +166,12 @@ state and registry untouched. Exit code 0 means everything passed.
   Windows notifications cannot be shown, or block them entirely. The doctor reports this; only IT can allow it.
 - "AuthorizationManager check failed": run `Get-ExecutionPolicy -List`; a Group Policy may block scripts.
 - After unzipping a download, run `Get-ChildItem <folder> -Recurse | Unblock-File`.
+- Administrator rights are never needed: everything is per user (`~/.claude`, `%TEMP%`, `HKCU`). Each Windows
+  account installs the plugin for itself; if you sign in to an elevation prompt with a different admin account,
+  Claude Code runs as that account and needs the plugin installed there too.
+- VS Code run as administrator: notifications still appear, but clicking one cannot open the window. Windows does
+  not let the link (opened as a normal user) reach an elevated VS Code, so VS Code says another instance is running
+  as administrator. Switch to the window yourself, or run VS Code normally.
 - To test without showing anything, pipe a hook payload into `scripts\notify.cmd` with `CTN_DRYRUN=1` set;
   the notification text is printed to stderr.
 

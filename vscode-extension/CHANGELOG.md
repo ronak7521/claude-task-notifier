@@ -19,6 +19,14 @@
 - A failure to add the plugin catalog is reported instead of being skipped, and problems at start-up show a message
   instead of only being logged.
 
+### Fixed
+- With several VS Code windows open, only one shows the start-up dialog, so two installs cannot run at once.
+- A GitHub 403 is reported as a rate limit or access problem, not as a missing internet connection.
+- A `settings.json` that is a symbolic link (for example into a dotfiles repo) stays a link when auto-update is
+  turned on.
+- The README explains that no administrator rights are needed, and why clicking a notification cannot open a
+  VS Code that runs as administrator.
+
 ## 1.0.1 - 2026-11-20
 
 ### Fixed

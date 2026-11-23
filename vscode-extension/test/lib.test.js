@@ -121,6 +121,12 @@ test('failure messages name the step, quote the error line and say what to do', 
     assert.match(lib.explainFailure('x', { code: 1, stderr: 'weird' }), /\(weird\)\. See the "Task Notifier" output/);
 });
 
+test('a GitHub 403 from git is a rate limit or access problem, not "check your internet"', () => {
+    const r = lib.explainFailure('x', { code: 1, stderr: "fatal: unable to access 'https://github.com/ronak7521/claude-task-notifier.git/': The requested URL returned error: 403" });
+    assert.match(r, /rate limit or no access/);
+    assert.doesNotMatch(r, /internet connection/);
+});
+
 test('failure messages for a timeout or a claude that cannot start', () => {
     assert.match(lib.explainFailure('x', { code: 1, timedOut: true, timeoutMs: 180000 }), /^x failed\. It did not finish within 180 seconds/);
     assert.match(lib.explainFailure('x', { code: 1, notStarted: true, stderr: 'spawn C:\\c\\claude.exe ENOENT' }), /claudePath/);
@@ -162,10 +168,89 @@ test('auto-update: a choice the user made is kept', () => {
     assert.deepEqual(JSON.parse(ownSource.text).extraKnownMarketplaces['ronak-plugins'], { source: { source: 'git', url: 'https://x' }, autoUpdate: true });
 });
 
+test('auto-update: turned off in /plugin before the extension wrote anything is kept off', () => {
+    const known = JSON.stringify({ 'ronak-plugins': { source: { source: 'github', repo: 'x/y' }, autoUpdate: false } });
+    assert.equal(lib.registeredAutoUpdate(known), false);
+    assert.deepEqual(lib.declareAutoUpdate('{}', lib.registeredAutoUpdate(known)),
+        { changed: false, reason: 'turned off in Claude Code (/plugin), so it was left off' });
+    // Never chosen (no field), or the file is missing or unreadable: turn it on.
+    for (const k of [JSON.stringify({ 'ronak-plugins': { source: {} } }), null, 'not json', '{}']) {
+        assert.equal(lib.registeredAutoUpdate(k), undefined, String(k));
+        assert.equal(lib.declareAutoUpdate('{}', lib.registeredAutoUpdate(k)).changed, true, String(k));
+    }
+    // An explicit true in settings.json still wins over an older false in the registry.
+    assert.equal(lib.declareAutoUpdate(JSON.stringify({ extraKnownMarketplaces: { 'ronak-plugins': AUTO } }), false).reason, 'already on');
+});
+
 test('auto-update: settings that are not plain JSON are never rewritten', () => {
     for (const t of ['{ // comment\n "a": 1 }', '[1]', '"x"', JSON.stringify({ extraKnownMarketplaces: [] })]) {
         assert.equal(lib.declareAutoUpdate(t).changed, false, t);
     }
+});
+
+test('start-up lock: one window at a time, released after, taken over when stale', () => {
+    const os = require('os');
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tn-lock-')), 'startup.lock');
+    const release = lib.tryLock(file, 60000, fs);
+    assert.equal(typeof release, 'function');
+    assert.equal(lib.tryLock(file, 60000, fs), null, 'a second window is turned away');
+    release();
+    assert.equal(fs.existsSync(file), false);
+    const again = lib.tryLock(file, 60000, fs);
+    assert.equal(typeof again, 'function', 'free again after release');
+    const old = new Date(Date.now() - 120000);
+    fs.utimesSync(file, old, old);
+    const takeover = lib.tryLock(file, 60000, fs);
+    assert.equal(typeof takeover, 'function', 'a lock left by a crashed window is taken over');
+    takeover();
+    assert.equal(typeof lib.tryLock(path.join(file, 'no', 'such', 'dir'), 60000, fs), 'function', 'no usable lock file: go ahead');
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
+});
+
+test('start-up lock: two windows that both see a crashed window\'s lock cannot both take it over', () => {
+    const os = require('os');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tn-race-'));
+    const file = path.join(dir, 'startup.lock');
+    const old = new Date(Date.now() - 120000);
+    fs.writeFileSync(file, 'crashed');
+    fs.utimesSync(file, old, old);
+
+    // Window B looks first and sees the old lock; window A then completes a takeover before B goes on.
+    let releaseA;
+    let firstLook = true;
+    const fsB = {
+        ...fs,
+        statSync: (p, ...r) => {
+            const st = fs.statSync(p, ...r);
+            if (p === file && firstLook) { firstLook = false; releaseA = lib.tryLock(file, 60000, fs); }
+            return st;
+        },
+    };
+    const b = lib.tryLock(file, 60000, fsB);
+    assert.equal(typeof releaseA, 'function', 'A took over the old lock');
+    assert.equal(b, null, 'B sees the lock is now in use and stays out');
+    assert.equal(fs.readFileSync(file, 'utf8'), String(process.pid), 'A\'s lock was not removed by B');
+    assert.equal(fs.existsSync(`${file}.takeover`), false, 'the takeover guard is cleaned up');
+
+    // While a takeover is under way, others stay out; a guard left by a crash is cleared for the next start.
+    releaseA();
+    fs.writeFileSync(file, 'crashed'); fs.utimesSync(file, old, old);
+    fs.writeFileSync(`${file}.takeover`, 'busy');
+    assert.equal(lib.tryLock(file, 60000, fs), null, 'a takeover in progress');
+    fs.utimesSync(`${file}.takeover`, old, old);
+    assert.equal(lib.tryLock(file, 60000, fs), null, 'an old guard is cleared, not used');
+    assert.equal(fs.existsSync(`${file}.takeover`), false);
+    const next = lib.tryLock(file, 60000, fs);
+    assert.equal(typeof next, 'function', 'the next start takes over');
+    next();
+    fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('extension.js: start-up check is locked across windows, settings are written through symlinks', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+    assert.match(src, /lib\.tryLock\(/);
+    assert.match(src, /finally \{\s*release\(\);/);
+    assert.match(src, /file = fs\.realpathSync\(file\)/);
 });
 
 test('package.json: commands, Windows-only targets and a machine-scoped claude path', () => {
