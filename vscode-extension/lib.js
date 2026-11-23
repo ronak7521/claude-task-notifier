@@ -159,8 +159,39 @@ function explainFailure(step, r) {
     return `${step} failed${detail ? ` (${detail})` : ''}. ${hint}`;
 }
 
+/**
+ * Turns on auto-update for this marketplace in the text of ~/.claude/settings.json. Claude Code reads
+ * extraKnownMarketplaces.<name>.autoUpdate from user settings at session start; third-party marketplaces are off by default.
+ * A value the user set (true or false, e.g. from /plugin) is kept. Text that is not a plain JSON object is left alone.
+ * @param {string|null} text the file's content, or null if it does not exist
+ * @returns {{changed: true, text: string} | {changed: false, reason: string}}
+ */
+function declareAutoUpdate(text) {
+    const raw = String(text || '').replace(/^﻿/, '');
+    let s;
+    if (!raw.trim()) s = {};
+    else {
+        try { s = JSON.parse(raw); } catch { return { changed: false, reason: 'settings.json is not plain JSON, so it was left unchanged' }; }
+    }
+    if (!s || typeof s !== 'object' || Array.isArray(s)) return { changed: false, reason: 'settings.json is not a JSON object, so it was left unchanged' };
+    const extra = s.extraKnownMarketplaces;
+    if (extra !== undefined && (!extra || typeof extra !== 'object' || Array.isArray(extra))) {
+        return { changed: false, reason: 'extraKnownMarketplaces in settings.json is not an object, so it was left unchanged' };
+    }
+    const cur = extra && extra[MARKETPLACE_NAME];
+    if (cur && cur.autoUpdate === false) return { changed: false, reason: 'turned off in your settings, so it was left off' };
+    if (cur && cur.autoUpdate === true) return { changed: false, reason: 'already on' };
+    const entry = cur && typeof cur === 'object' && !Array.isArray(cur) ? { ...cur } : {};
+    if (!entry.source) entry.source = { source: 'github', repo: MARKETPLACE_SOURCE };
+    entry.autoUpdate = true;
+    s.extraKnownMarketplaces = { ...(extra || {}), [MARKETPLACE_NAME]: entry };
+    const indentMatch = raw.match(/\n([ \t]+)"/);
+    const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+    return { changed: true, text: JSON.stringify(s, null, indentMatch ? indentMatch[1] : 2).replace(/\n/g, eol) + eol };
+}
+
 module.exports = {
     PLUGIN_NAME, MARKETPLACE_NAME, MARKETPLACE_SOURCE, PLUGIN_ID, ARGS,
     claudeCandidates, findClaude, commandFor, findJsonArray, parsePluginList, doctorScript,
-    errorLine, explainFailure,
+    errorLine, explainFailure, declareAutoUpdate,
 };

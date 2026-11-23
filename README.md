@@ -44,6 +44,24 @@ Notifications are modern Windows toasts:
 Start a new Claude Code session afterwards (in VS Code: **Developer: Reload Window**). Then run
 `/task-notifier:test` to check that a notification appears.
 
+Or install the **Task Notifier for Claude Code** extension from the VS Code Marketplace: it asks once and runs these
+steps for you, and turns on auto-update.
+
+### Updates
+Claude Code turns auto-update off for marketplaces other than Anthropic's. To get new versions automatically, run
+`/plugin`, open **Marketplaces**, pick **ronak-plugins** and choose **Enable auto-update**, or add this to
+`~/.claude/settings.json`:
+```json
+"extraKnownMarketplaces": {
+  "ronak-plugins": {
+    "source": { "source": "github", "repo": "ronak7521/claude-task-notifier" },
+    "autoUpdate": true
+  }
+}
+```
+Claude Code then updates the plugin when a session starts. To update by hand:
+`claude plugin marketplace update ronak-plugins`, then `claude plugin update task-notifier@ronak-plugins`.
+
 ## Commands
 - `/task-notifier:test` sends a test notification and checks the Windows notification settings.
 - `/task-notifier:doctor` explains why notifications do not appear: whether the plugin is installed, turned on and

@@ -2,6 +2,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const os = require('os');
+const path = require('path');
 const { execFile } = require('child_process');
 const lib = require('./lib');
 
@@ -113,6 +114,33 @@ async function status(claudePath) {
     }
 }
 
+function claudeSettingsPath() {
+    const dir = process.env.CLAUDE_CONFIG_DIR;
+    return path.join(dir && path.isAbsolute(dir) ? dir : path.join(os.homedir(), '.claude'), 'settings.json');
+}
+
+/**
+ * Turns on Claude Code's auto-update for the plugin's marketplace (it applies from the next Claude Code session).
+ * Never throws: a failure here must not fail an install.
+ */
+function ensureAutoUpdate() {
+    try {
+        if (vscode.workspace.getConfiguration('taskNotifier').get('autoUpdatePlugin') === false) return;
+        const file = claudeSettingsPath();
+        let text = null;
+        try { text = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        const r = lib.declareAutoUpdate(text);
+        if (!r.changed) { log(`Plugin auto-update: ${r.reason}.`); return; }
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const tmp = `${file}.task-notifier.tmp`;
+        fs.writeFileSync(tmp, r.text);
+        fs.renameSync(tmp, file);
+        log(`Plugin auto-update turned on in ${file} (extraKnownMarketplaces.${lib.MARKETPLACE_NAME}.autoUpdate). Claude Code applies it from the next session.`);
+    } catch (e) {
+        log(`Could not turn on plugin auto-update: ${e.message || e}. Turn it on in Claude Code: /plugin > Marketplaces > ${lib.MARKETPLACE_NAME} > Enable auto-update.`);
+    }
+}
+
 async function offerReload(message) {
     const pick = await vscode.window.showInformationMessage(message, 'Reload Window');
     if (pick === 'Reload Window') vscode.commands.executeCommand('workbench.action.reloadWindow');
@@ -129,6 +157,7 @@ async function install() {
         if (!s.installed) throw new Error('Claude Code reported success, but the plugin is not in its list. Try "Task Notifier: Install or Repair Claude Code Plugin" again.');
         if (!s.enabled) await claudeStep(claudePath, lib.ARGS.enable, 'Turning on the Task Notifier plugin');
     });
+    ensureAutoUpdate();
     await offerReload('Task Notifier is installed. Reload the window (and restart any Claude Code terminal session) so Claude Code loads it.');
 }
 
@@ -143,6 +172,7 @@ async function update() {
         if (refresh.code !== 0) throw new Error(lib.explainFailure('Checking for a new version', refresh));
         await claudeStep(claudePath, lib.ARGS.update, 'Updating the Task Notifier plugin');
     });
+    ensureAutoUpdate();
     const after = await status(claudePath);
     if (after.version === s.version) {
         vscode.window.showInformationMessage(`Task Notifier ${after.version} is the latest version.`);
@@ -200,11 +230,14 @@ async function checkOnStartup(context) {
         return;
     }
     const s = await status(claudePath);
+    // Also for plugins installed before this version or by hand.
+    if (s.installed) ensureAutoUpdate();
     if (s.installed && s.enabled) return;
     const text = s.installed
         ? 'The Task Notifier plugin is turned off in Claude Code. Turn it on?'
         : 'Task Notifier needs its Claude Code plugin to send Windows notifications. Install it now?';
-    const detail = 'Without it you get no notifications. You can do this later with "Task Notifier: Install or Repair Claude Code Plugin" (Ctrl+Shift+P).';
+    const detail = 'Without it you get no notifications. Claude Code will keep it up to date automatically. '
+        + 'You can do this later with "Task Notifier: Install or Repair Claude Code Plugin" (Ctrl+Shift+P).';
     // Modal, so it cannot be missed; Cancel ("not now") asks again at the next start.
     const pick = await vscode.window.showInformationMessage(text, { modal: true, detail }, s.installed ? 'Turn On' : 'Install', "Don't Ask Again");
     if (pick === 'Install') await install();

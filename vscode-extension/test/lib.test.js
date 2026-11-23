@@ -133,6 +133,41 @@ test('the error line skips colours and progress lines and is kept short', () => 
     assert.equal(lib.errorLine(''), '');
 });
 
+const AUTO = { source: { source: 'github', repo: 'ronak7521/claude-task-notifier' }, autoUpdate: true };
+
+test('auto-update: added to settings.json, keeping everything else and its formatting', () => {
+    const text = '{\r\n    "model": "opus",\r\n    "extraKnownMarketplaces": {\r\n        "other": { "source": { "source": "github", "repo": "a/b" } }\r\n    }\r\n}\r\n';
+    const r = lib.declareAutoUpdate(text);
+    assert.equal(r.changed, true);
+    const s = JSON.parse(r.text);
+    assert.equal(s.model, 'opus');
+    assert.deepEqual(s.extraKnownMarketplaces.other, { source: { source: 'github', repo: 'a/b' } });
+    assert.deepEqual(s.extraKnownMarketplaces['ronak-plugins'], AUTO);
+    assert.match(r.text, /^\{\r\n {4}"model"/);
+    assert.ok(r.text.endsWith('}\r\n'));
+});
+
+test('auto-update: a missing, empty or BOM-prefixed settings file', () => {
+    for (const t of [null, '', '﻿{}']) {
+        const r = lib.declareAutoUpdate(t);
+        assert.deepEqual(JSON.parse(r.text), { extraKnownMarketplaces: { 'ronak-plugins': AUTO } }, String(t));
+    }
+});
+
+test('auto-update: a choice the user made is kept', () => {
+    const off = JSON.stringify({ extraKnownMarketplaces: { 'ronak-plugins': { source: { source: 'github', repo: 'x/y' }, autoUpdate: false } } });
+    assert.deepEqual(lib.declareAutoUpdate(off), { changed: false, reason: 'turned off in your settings, so it was left off' });
+    assert.equal(lib.declareAutoUpdate(JSON.stringify({ extraKnownMarketplaces: { 'ronak-plugins': AUTO } })).changed, false);
+    const ownSource = lib.declareAutoUpdate(JSON.stringify({ extraKnownMarketplaces: { 'ronak-plugins': { source: { source: 'git', url: 'https://x' } } } }));
+    assert.deepEqual(JSON.parse(ownSource.text).extraKnownMarketplaces['ronak-plugins'], { source: { source: 'git', url: 'https://x' }, autoUpdate: true });
+});
+
+test('auto-update: settings that are not plain JSON are never rewritten', () => {
+    for (const t of ['{ // comment\n "a": 1 }', '[1]', '"x"', JSON.stringify({ extraKnownMarketplaces: [] })]) {
+        assert.equal(lib.declareAutoUpdate(t).changed, false, t);
+    }
+});
+
 test('package.json: commands, Windows-only targets and a machine-scoped claude path', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
     const src = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
@@ -140,6 +175,8 @@ test('package.json: commands, Windows-only targets and a machine-scoped claude p
     assert.equal(pkg.publisher, 'RonakChotaliya');
     // A workspace must not be able to point the extension at a claude.exe of its choosing.
     assert.equal(pkg.contributes.configuration.properties['taskNotifier.claudePath'].scope, 'machine');
+    assert.equal(pkg.contributes.configuration.properties['taskNotifier.autoUpdatePlugin'].scope, 'machine');
+    assert.equal(pkg.contributes.configuration.properties['taskNotifier.autoUpdatePlugin'].default, true);
     assert.match(pkg.scripts.package, /--target win32-x64/);
     assert.deepEqual(pkg.extensionKind, ['ui']);
 });

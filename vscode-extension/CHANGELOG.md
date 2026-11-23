@@ -2,6 +2,12 @@
 
 ## 1.0.2 - 2026-11-23
 
+### Added
+- Auto-update for the plugin: after an install, update or turn-on, and at start-up when the plugin is installed,
+  the extension sets `extraKnownMarketplaces.ronak-plugins.autoUpdate` in `~/.claude/settings.json`, so Claude Code
+  installs new versions when a session starts. A choice made in `/plugin` is kept; the new
+  `taskNotifier.autoUpdatePlugin` setting turns this off.
+
 ### Changed
 - The "Install it now?" prompt at start-up is a dialog in the middle of the window instead of a message that hid in
   the notification bell after a few seconds. Cancel asks again at the next start; running

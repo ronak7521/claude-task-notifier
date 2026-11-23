@@ -21,7 +21,8 @@ This extension installs and manages that plugin for you:
    without your OK.
 2. It runs Claude Code's own commands (`claude plugin marketplace add ronak7521/claude-task-notifier` and
    `claude plugin install task-notifier@ronak-plugins`), the same ones you could type yourself.
-3. Reload the window, and notifications start with your next Claude Code task.
+3. It turns on Claude Code's auto-update for the plugin, so you get new versions without doing anything.
+4. Reload the window, and notifications start with your next Claude Code task.
 
 It uses the `claude` program that comes with the Claude Code extension, or one installed from
 [claude.com/claude-code](https://claude.com/claude-code).
@@ -45,6 +46,12 @@ Notification options (minimum task length, privacy mode, which types to show) ar
 
 `taskNotifier.claudePath`: full path to `claude.exe`, if the extension cannot find it. It can only be set in your
 user settings, not by a workspace.
+
+`taskNotifier.autoUpdatePlugin` (on by default): turns on Claude Code's auto-update for the plugin, so new versions
+install when a Claude Code session starts. Claude Code leaves auto-update off for marketplaces other than Anthropic's,
+so the extension sets `extraKnownMarketplaces.ronak-plugins.autoUpdate` in `~/.claude/settings.json`. If you turn
+auto-update off in Claude Code (`/plugin` > **Marketplaces**), the extension keeps it off. The extension itself is
+updated by VS Code like any other extension.
 
 ## Troubleshooting
 
