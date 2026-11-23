@@ -44,6 +44,24 @@ Notifications are modern Windows toasts:
 Start a new Claude Code session afterwards (in VS Code: **Developer: Reload Window**). Then run
 `/task-notifier:test` to check that a notification appears.
 
+Or install the **Task Notifier for Claude Code** extension from the VS Code Marketplace: it offers to run these
+steps for you, and turns on auto-update.
+
+### Updates
+Claude Code turns auto-update off for marketplaces other than Anthropic's. To get new versions automatically, run
+`/plugin`, open **Marketplaces**, pick **ronak-plugins** and choose **Enable auto-update**, or add this to
+`~/.claude/settings.json`:
+```json
+"extraKnownMarketplaces": {
+  "ronak-plugins": {
+    "source": { "source": "github", "repo": "ronak7521/claude-task-notifier" },
+    "autoUpdate": true
+  }
+}
+```
+Claude Code then updates the plugin when a session starts. To update by hand:
+`claude plugin marketplace update ronak-plugins`, then `claude plugin update task-notifier@ronak-plugins`.
+
 ## Commands
 - `/task-notifier:test` sends a test notification and checks the Windows notification settings.
 - `/task-notifier:doctor` explains why notifications do not appear: whether the plugin is installed, turned on and
@@ -148,6 +166,12 @@ state and registry untouched. Exit code 0 means everything passed.
   Windows notifications cannot be shown, or block them entirely. The doctor reports this; only IT can allow it.
 - "AuthorizationManager check failed": run `Get-ExecutionPolicy -List`; a Group Policy may block scripts.
 - After unzipping a download, run `Get-ChildItem <folder> -Recurse | Unblock-File`.
+- Administrator rights are never needed: everything is per user (`~/.claude`, `%TEMP%`, `HKCU`). Each Windows
+  account installs the plugin for itself; if you sign in to an elevation prompt with a different admin account,
+  Claude Code runs as that account and needs the plugin installed there too.
+- VS Code run as administrator: notifications still appear, but clicking one cannot open the window. Windows does
+  not let the link (opened as a normal user) reach an elevated VS Code, so VS Code says another instance is running
+  as administrator. Switch to the window yourself, or run VS Code normally.
 - To test without showing anything, pipe a hook payload into `scripts\notify.cmd` with `CTN_DRYRUN=1` set;
   the notification text is printed to stderr.
 

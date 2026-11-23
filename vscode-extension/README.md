@@ -21,7 +21,8 @@ This extension installs and manages that plugin for you:
    without your OK.
 2. It runs Claude Code's own commands (`claude plugin marketplace add ronak7521/claude-task-notifier` and
    `claude plugin install task-notifier@ronak-plugins`), the same ones you could type yourself.
-3. Reload the window, and notifications start with your next Claude Code task.
+3. It turns on Claude Code's auto-update for the plugin, so you get new versions without doing anything.
+4. Reload the window, and notifications start with your next Claude Code task.
 
 It uses the `claude` program that comes with the Claude Code extension, or one installed from
 [claude.com/claude-code](https://claude.com/claude-code).
@@ -45,6 +46,61 @@ Notification options (minimum task length, privacy mode, which types to show) ar
 
 `taskNotifier.claudePath`: full path to `claude.exe`, if the extension cannot find it. It can only be set in your
 user settings, not by a workspace.
+
+`taskNotifier.autoUpdatePlugin` (on by default): turns on Claude Code's auto-update for the plugin, so new versions
+install when a Claude Code session starts. Claude Code leaves auto-update off for marketplaces other than Anthropic's,
+so the extension sets `extraKnownMarketplaces.ronak-plugins.autoUpdate` in `~/.claude/settings.json`. If you turn
+auto-update off in Claude Code (`/plugin` > **Marketplaces**), the extension keeps it off. The extension itself is
+updated by VS Code like any other extension.
+
+## Troubleshooting
+
+### The extension is installed, but no notifications appear and the plugin is not in Claude Code
+
+The extension is only the installer. The notifications come from the **Task Notifier plugin** for Claude Code,
+and it is installed only after you click **Install** in the "Install it now?" dialog that appears when VS Code starts.
+**Cancel** installs nothing; the dialog comes back at the next start, unless you picked **Don't Ask Again**.
+(Before version 1.0.2 this was a small message that VS Code hid in the **bell icon** after a few seconds.)
+
+To install the plugin now:
+
+1. Press **Ctrl+Shift+P** and run **Task Notifier: Install or Repair Claude Code Plugin**.
+2. Click **Reload Window** when asked, and restart any Claude Code session running in a terminal.
+3. Run **Task Notifier: Send Test Notification**. A "Task Notifier" toast should appear.
+
+To check it worked, run `claude plugin list` in a terminal, or `/plugin` in Claude Code. You should see
+`task-notifier@ronak-plugins`.
+
+### Administrator or normal user
+
+Neither the extension nor the plugin needs administrator rights: everything is installed for your Windows account
+only (`~/.claude`, `%TEMP%`, `HKCU`). Each account that uses Claude Code installs the plugin for itself.
+
+If you run VS Code **as administrator**, notifications still appear, but clicking one cannot bring up the window:
+Windows does not let the link reach an elevated VS Code, and VS Code says another instance is running as
+administrator. Switch to the window yourself, or run VS Code normally.
+
+### Seeing what the extension did
+
+Open **View → Output** and pick **Task Notifier** in the drop-down. It shows every `claude` command the extension
+ran and what it printed.
+
+### "Task Notifier needs Claude Code, but it is not installed on this PC"
+
+Install the Claude Code extension or CLI, then reload the window. The "Task Notifier" output lists every place the
+extension looked. If Claude Code is installed somewhere else, set `taskNotifier.claudePath` in your user settings to
+the full path of `claude.exe`.
+
+### An install or update failed
+
+The error message names the step that failed, quotes Claude Code's error and says what to do, for example check
+the internet connection or proxy, install Git for Windows, or wait for a GitHub rate limit. Click **Show Output**
+for the full log, fix the cause, then run **Task Notifier: Install or Repair Claude Code Plugin** again.
+
+### Still no toasts after the plugin is installed
+
+Run **Task Notifier: Diagnose Missing Notifications**. It checks Windows notification settings, Focus Assist,
+company policies and your Claude Code settings, and says what to change.
 
 ## Privacy
 

@@ -2,7 +2,7 @@
   "name": "task-notifier",
   "displayName": "Task Notifier for Claude Code",
   "description": "Windows notifications when Claude Code finishes a task, hits an error, or waits for your permission or answer.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "RonakChotaliya",
   "license": "MIT",
   "icon": "icon.png",
@@ -76,6 +76,12 @@
           "default": "",
           "scope": "machine",
           "markdownDescription": "Full path to `claude.exe` (or `claude.cmd`). Leave empty to use the one from the Claude Code extension, `%USERPROFILE%\\.local\\bin` or PATH."
+        },
+        "taskNotifier.autoUpdatePlugin": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Turn on Claude Code's auto-update for the Task Notifier plugin, so new versions install when a Claude Code session starts. Sets `extraKnownMarketplaces.ronak-plugins.autoUpdate` in `~/.claude/settings.json`. If you turn auto-update off in Claude Code (`/plugin` > Marketplaces), that choice is kept."
         }
       }
     }

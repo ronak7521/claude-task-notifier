@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.2 - 2026-11-23
+
+### Added
+- Auto-update for the plugin: after an install, update or turn-on, and at start-up when the plugin is installed,
+  the extension sets `extraKnownMarketplaces.ronak-plugins.autoUpdate` in `~/.claude/settings.json`, so Claude Code
+  installs new versions when a session starts. A choice made in `/plugin` is kept; the new
+  `taskNotifier.autoUpdatePlugin` setting turns this off.
+
+### Changed
+- The "Install it now?" prompt at start-up is a dialog in the middle of the window instead of a message that hid in
+  the notification bell after a few seconds. Cancel asks again at the next start; running
+  "Install or Repair Claude Code Plugin" undoes an earlier "Don't Ask Again".
+- When Claude Code is not installed, the extension says so at start-up, lists where it looked in the
+  "Task Notifier" output, and offers to open the Claude Code download page or the `taskNotifier.claudePath` setting.
+- Failed steps now show what went wrong and how to fix it: no internet or proxy, Git missing, a GitHub rate limit,
+  a locked file, a company policy, a timeout. Every error has a **Show Output** button.
+- A failure to add the plugin catalog is reported instead of being skipped, and problems at start-up show a message
+  instead of only being logged.
+
+### Fixed
+- With several VS Code windows open, only one shows the start-up dialog, so two installs cannot run at once.
+- A GitHub 403 is reported as a rate limit or access problem, not as a missing internet connection.
+- A `settings.json` that is a symbolic link (for example into a dotfiles repo) stays a link when auto-update is
+  turned on.
+- The README explains that no administrator rights are needed, and why clicking a notification cannot open a
+  VS Code that runs as administrator.
+
 ## 1.0.1 - 2026-11-20
 
 ### Fixed
