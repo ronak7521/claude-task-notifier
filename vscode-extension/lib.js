@@ -113,7 +113,54 @@ function doctorScript(installPath, exists) {
     return exists(p) ? p : null;
 }
 
+// Known causes of a failed claude command, matched against its output, with what the user can do about each.
+const HINTS = [
+    [/spawn git|git[^\n]*(not found|not recognized|ENOENT)/i,
+        'Git is needed to download the plugin. Install Git for Windows (https://git-scm.com), restart VS Code and try again.'],
+    [/ENOTFOUND|EAI_AGAIN|getaddrinfo|Could not resolve host|ECONNREFUSED|ECONNRESET|ETIMEDOUT|unable to access|network|proxy|certificate|SSL/i,
+        'Claude Code could not reach GitHub. Check your internet connection, VPN or proxy, then try again.'],
+    [/rate limit|\b403\b/i,
+        'GitHub refused the request (rate limit or no access). Wait a few minutes and try again.'],
+    [/EACCES|EPERM|EBUSY|access is denied|permission denied/i,
+        'Windows refused access to a file under %USERPROFILE%\\.claude. Close other Claude Code sessions and try again; if it repeats, antivirus or a company policy may be blocking it.'],
+    [/policy|managed settings|not allowed|blocked/i,
+        'Your organization\'s Claude Code settings may block plugins from this source. Ask your IT admin.'],
+    [/not found|unknown (plugin|marketplace)/i,
+        'Claude Code could not find the plugin in its catalog. Try "Task Notifier: Install or Repair Claude Code Plugin" again in a few minutes.'],
+];
+
+/**
+ * The most telling line of CLI output: the first one that looks like an error, else the last one.
+ * @param {string} text
+ */
+function errorLine(text) {
+    const lines = String(text).replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const line = lines.find((l) => /error|failed|denied|cannot|could not|not found|✘/i.test(l)) || lines[lines.length - 1] || '';
+    return line.length > 200 ? `${line.slice(0, 197)}...` : line;
+}
+
+/**
+ * A message for a failed step that says what went wrong and what to do.
+ * @param {string} step e.g. "Installing the plugin"
+ * @param {{code: number, stdout?: string, stderr?: string, timedOut?: boolean, notStarted?: boolean, timeoutMs?: number}} r
+ */
+function explainFailure(step, r) {
+    const text = `${r.stdout || ''}\n${r.stderr || ''}`;
+    let hint;
+    if (r.timedOut) {
+        hint = `It did not finish within ${Math.round((r.timeoutMs || 0) / 1000)} seconds. Check your connection and try again.`;
+    } else if (r.notStarted) {
+        hint = 'The claude program could not be started. Reinstall Claude Code, or set "taskNotifier.claudePath" to the full path of claude.exe.';
+    } else {
+        const found = HINTS.find(([re]) => re.test(text));
+        hint = found ? found[1] : 'See the "Task Notifier" output for the full message.';
+    }
+    const detail = r.timedOut ? '' : errorLine(text);
+    return `${step} failed${detail ? ` (${detail})` : ''}. ${hint}`;
+}
+
 module.exports = {
     PLUGIN_NAME, MARKETPLACE_NAME, MARKETPLACE_SOURCE, PLUGIN_ID, ARGS,
     claudeCandidates, findClaude, commandFor, findJsonArray, parsePluginList, doctorScript,
+    errorLine, explainFailure,
 };

@@ -2,7 +2,7 @@
   "name": "task-notifier",
   "displayName": "Task Notifier for Claude Code",
   "description": "Windows notifications when Claude Code finishes a task, hits an error, or waits for your permission or answer.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "RonakChotaliya",
   "license": "MIT",
   "icon": "icon.png",

@@ -51,13 +51,9 @@ user settings, not by a workspace.
 ### The extension is installed, but no notifications appear and the plugin is not in Claude Code
 
 The extension is only the installer. The notifications come from the **Task Notifier plugin** for Claude Code,
-and it is installed only after you click **Install** in the "Install it now?" message. That message is easy to miss:
-
-- VS Code hides messages after a few seconds and moves them to the **bell icon** at the bottom right.
-- With **Do Not Disturb** turned on, messages are not shown at all.
-
-Closing or ignoring the message installs nothing. It comes back the next time VS Code starts, unless you picked
-**Don't Ask Again**.
+and it is installed only after you click **Install** in the "Install it now?" dialog that appears when VS Code starts.
+**Cancel** installs nothing; the dialog comes back at the next start, unless you picked **Don't Ask Again**.
+(Before version 1.0.2 this was a small message that VS Code hid in the **bell icon** after a few seconds.)
 
 To install the plugin now:
 
@@ -73,10 +69,17 @@ To check it worked, run `claude plugin list` in a terminal, or `/plugin` in Clau
 Open **View → Output** and pick **Task Notifier** in the drop-down. It shows every `claude` command the extension
 ran and what it printed.
 
-### "Task Notifier could not find Claude Code"
+### "Task Notifier needs Claude Code, but it is not installed on this PC"
 
-Install the Claude Code extension or CLI. If it is installed somewhere unusual, set `taskNotifier.claudePath` in your
-user settings to the full path of `claude.exe`.
+Install the Claude Code extension or CLI, then reload the window. The "Task Notifier" output lists every place the
+extension looked. If Claude Code is installed somewhere else, set `taskNotifier.claudePath` in your user settings to
+the full path of `claude.exe`.
+
+### An install or update failed
+
+The error message names the step that failed, quotes Claude Code's error and says what to do, for example check
+the internet connection or proxy, install Git for Windows, or wait for a GitHub rate limit. Click **Show Output**
+for the full log, fix the cause, then run **Task Notifier: Install or Repair Claude Code Plugin** again.
 
 ### Still no toasts after the plugin is installed
 

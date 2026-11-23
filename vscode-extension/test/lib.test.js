@@ -109,6 +109,30 @@ test('doctor script: found in the install folder, missing before 1.5.0', () => {
     assert.equal(lib.doctorScript('relative\\dir', () => true), null);
 });
 
+test('failure messages name the step, quote the error line and say what to do', () => {
+    const net = lib.explainFailure('Installing the plugin', { code: 1, stdout: 'Cloning...\n', stderr: "fatal: unable to access 'https://github.com/x/': Could not resolve host: github.com\n" });
+    assert.match(net, /^Installing the plugin failed \(fatal: unable to access/);
+    assert.match(net, /could not reach GitHub/);
+    assert.match(lib.explainFailure('x', { code: 1, stderr: 'Error: spawn git ENOENT' }), /Install Git for Windows/);
+    assert.match(lib.explainFailure('x', { code: 1, stderr: 'HTTP 403: API rate limit exceeded' }), /rate limit or no access/);
+    assert.match(lib.explainFailure('x', { code: 1, stderr: 'EPERM: operation not permitted, rename' }), /Windows refused access/);
+    assert.match(lib.explainFailure('x', { code: 1, stderr: 'Plugin task-notifier not found in marketplace ronak-plugins' }), /catalog/);
+    assert.match(lib.explainFailure('x', { code: 1, stderr: 'Blocked by managed settings policy' }), /IT admin/);
+    assert.match(lib.explainFailure('x', { code: 1, stderr: 'weird' }), /\(weird\)\. See the "Task Notifier" output/);
+});
+
+test('failure messages for a timeout or a claude that cannot start', () => {
+    assert.match(lib.explainFailure('x', { code: 1, timedOut: true, timeoutMs: 180000 }), /^x failed\. It did not finish within 180 seconds/);
+    assert.match(lib.explainFailure('x', { code: 1, notStarted: true, stderr: 'spawn C:\\c\\claude.exe ENOENT' }), /claudePath/);
+});
+
+test('the error line skips colours and progress lines and is kept short', () => {
+    assert.equal(lib.errorLine('\x1b[32mFetching\x1b[0m\n\x1b[31m✘ Failed to install\x1b[0m\ndone'), '✘ Failed to install');
+    assert.equal(lib.errorLine('one\ntwo\n'), 'two');
+    assert.equal(lib.errorLine('error ' + 'x'.repeat(300)).length, 200);
+    assert.equal(lib.errorLine(''), '');
+});
+
 test('package.json: commands, Windows-only targets and a machine-scoped claude path', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
     const src = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
@@ -126,4 +150,11 @@ test('extension.js: the doctor runs as "outside a session", and a failed catalog
     assert.match(src, /toUpperCase\(\) === 'CLAUDECODE'\) delete env\[k\]/);
     assert.match(src, /refresh\.code !== 0\) throw/);
     assert.match(src, /cwd: os\.homedir\(\)/);
+});
+
+test('extension.js: the start-up prompts are modal, so they cannot hide in the notification bell', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+    assert.match(src, /showInformationMessage\(text, \{ modal: true/);
+    assert.match(src, /reportNoClaude\(true\)/);
+    assert.match(src, /modal: atStartup/);
 });
